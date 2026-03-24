@@ -1,0 +1,12 @@
+name = "signalbase-mcp"
+main = "src/entry.py"
+compatibility_date = "2024-12-18"
+compatibility_flags = ["python_workers"]
+
+[observability]
+enabled = true
+
+# Uncomment and edit to use a custom domain:
+# [[routes]]
+# pattern = "mcp.yourdomain.com/*"
+# zone_name = "yourdomain.com"

@@ -1,0 +1,3 @@
+# No pip packages needed — the worker runs on Pyodide inside Cloudflare Workers.
+# Only Python standard library + JS interop (js.*, pyodide.ffi.*) are available.
+# This file exists for local development/linting convenience only.

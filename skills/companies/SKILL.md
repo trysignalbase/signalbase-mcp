@@ -1,0 +1,57 @@
+---
+name: signalbase-companies
+description: Use when the user asks about company profiles, company search, headcount data, company growth metrics, or wants to look up specific companies independent of signal data.
+argument-hint: "[company name, industry, geography, or size range]"
+---
+
+# Companies Skill
+
+## Tool: `search_companies`
+**Endpoint:** `GET /companies` | **Cost:** 1 credit (free with count=true)
+
+## Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | integer | Page number (default 1) |
+| `limit` | integer | Results per page, max 100 |
+| `search` | string | Name, industry, description, keywords |
+| `countries` | string | Comma-separated country codes |
+| `industry` | string | Comma-separated industry names (exact) |
+| `employee_count_min` | integer | Minimum employees |
+| `employee_count_max` | integer | Maximum employees |
+| `founded_year_min` | integer | Min founded year |
+| `founded_year_max` | integer | Max founded year |
+| `sort_by` | string | `name`, `employee_count`, `founded_year`, `created_at` |
+| `sort_order` | string | `asc` or `desc` |
+| `count` | boolean | If true, returns only count (free) |
+
+## Example Workflows
+
+### Count companies in a segment (free)
+```json
+{"search": "AI", "countries": "US", "count": true}
+```
+
+### Find fast-growing startups (50-200 employees, founded 2021+)
+```json
+{"founded_year_min": 2021, "employee_count_min": 50, "employee_count_max": 200, "sort_by": "employee_count", "sort_order": "desc"}
+```
+
+### Look up a specific company
+```json
+{"search": "Stripe"}
+```
+
+### Browse by industry
+```json
+{"industry": "Software Development", "countries": "US,GB", "limit": 50}
+```
+
+## Gotchas
+
+- Use `count=true` first to preview result size for free
+- `industry` param is **exact match** on LinkedIn industry label
+- `growthInfo` in response can be `null` — not all companies have growth data
+- Growth percentages: `growth_1m`, `growth_3m`, `growth_6m`, `growth_9m`, `growth_12m`
+- `categories`, `keywords`, `specialties` in the response are arrays — these are response fields, not filter params
