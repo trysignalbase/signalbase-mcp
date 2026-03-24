@@ -30,7 +30,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
       "command": "npx",
       "args": [
         "mcp-remote",
-        "https://signalbase-mcp.YOUR_SUBDOMAIN.workers.dev",
+        "https://mcp.trysignalbase.com",
         "--header",
         "Authorization: Bearer YOUR_API_KEY"
       ]
@@ -44,7 +44,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 ```bash
 claude mcp add signalbase \
   --transport http \
-  --url https://signalbase-mcp.YOUR_SUBDOMAIN.workers.dev \
+  --url https://mcp.trysignalbase.com \
   --header "Authorization: Bearer YOUR_API_KEY"
 ```
 
@@ -56,7 +56,7 @@ Create or edit `.cursor/mcp.json` in your project root:
 {
   "mcpServers": {
     "signalbase": {
-      "url": "https://signalbase-mcp.YOUR_SUBDOMAIN.workers.dev",
+      "url": "https://mcp.trysignalbase.com",
       "headers": {
         "Authorization": "Bearer YOUR_API_KEY"
       }
@@ -70,7 +70,7 @@ Create or edit `.cursor/mcp.json` in your project root:
 Send a POST request with a JSON-RPC 2.0 body:
 
 ```bash
-curl -X POST https://signalbase-mcp.YOUR_SUBDOMAIN.workers.dev \
+curl -X POST https://mcp.trysignalbase.com \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
