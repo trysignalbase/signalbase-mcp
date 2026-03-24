@@ -23,7 +23,7 @@ This MCP server provides access to the Signalbase API for real-time business int
 
 ### MCP Endpoint
 ```
-https://signalbase-mcp.<your-subdomain>.workers.dev
+https://mcp.trysignalbase.com
 ```
 
 ### Transport
@@ -45,7 +45,7 @@ Get your key at: https://www.trysignalbase.com/workspace/api
       "command": "npx",
       "args": [
         "mcp-remote",
-        "https://signalbase-mcp.<your-subdomain>.workers.dev",
+        "https://mcp.trysignalbase.com",
         "--header",
         "Authorization: Bearer YOUR_API_KEY"
       ]
@@ -59,7 +59,7 @@ Get your key at: https://www.trysignalbase.com/workspace/api
 {
   "mcpServers": {
     "signalbase": {
-      "url": "https://signalbase-mcp.<your-subdomain>.workers.dev",
+      "url": "https://mcp.trysignalbase.com",
       "headers": {
         "Authorization": "Bearer YOUR_API_KEY"
       }
