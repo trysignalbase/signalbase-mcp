@@ -15,7 +15,7 @@ from js import Response, Headers, Object, fetch, JSON
 API_BASE = "https://www.trysignalbase.com/api/v2"
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_NAME = "signalbase-mcp"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.1.0"
 
 DATE_PRESETS = [
     "today", "yesterday", "last_7d", "last_14d", "last_30d",
@@ -66,10 +66,187 @@ INVESTOR_TYPES = [
     "accelerator", "family_office", "hedge_fund", "crowdfunding",
 ]
 
+COUNTRY_REGIONS = [
+    "EU", "EUROPE", "DACH", "BENELUX", "NORDICS", "CEE", "WE", "NA", "LATAM",
+]
+
+TEAM_SIZE_RANGES = ["1-10", "11-50", "51-200", "201-1000", "1000-plus"]
+APPLICANT_RANGES = ["0-25", "26-50", "51-100", "101-200", "201-plus"]
+
+# Response trimming (default mode, see _trim_response)
+TRIM_MAX_CHARS = 300
+TRIM_TEXT_FIELDS = {
+    "descriptionText", "companyDescription", "description",
+    "postContent", "personHeadline",
+}
+TRIM_DROP_FIELDS = {
+    "companyLogo", "companyLogoUrl", "logoUrl", "logo_url", "image",
+}
+TRIM_META = {"trimmed": True, "hint": "pass verbose=true for full text"}
+
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
+}
+
+# ──────────────────────────────────────────────────────────────
+# Shared input-schema property snippets
+# ──────────────────────────────────────────────────────────────
+
+PAGE_PROP = {
+    "type": "integer",
+    "description": "Page number (default 1)",
+    "minimum": 1,
+    "default": 1,
+}
+
+
+def _limit_prop(maximum: int) -> dict:
+    return {
+        "type": "integer",
+        "description": f"Results per page, max {maximum} (default 20)",
+        "minimum": 1,
+        "maximum": maximum,
+        "default": 20,
+    }
+
+
+COUNT_PROP = {
+    "type": "boolean",
+    "description": (
+        "If true, returns only the total matching count. FREE on every tool "
+        "(0 credits) — use it to size a query before spending a credit."
+    ),
+}
+
+VERBOSE_PROP = {
+    "type": "boolean",
+    "description": (
+        "Worker-only flag, never forwarded to the API. Default false: long text "
+        "fields (descriptions, post content, headlines) are truncated to 300 "
+        "characters and logo/image URLs are dropped to save tokens. Pass true "
+        "to receive the full, untrimmed API payload."
+    ),
+}
+
+COUNTRIES_PROP = {
+    "type": "string",
+    "description": (
+        "Comma-separated countries. Accepts ISO 3166-1 alpha-2 codes (US,GB,DE), "
+        "English names (Sweden, Germany) or region shortcuts "
+        f"{', '.join(COUNTRY_REGIONS)}. Unknown values return HTTP 400."
+    ),
+}
+
+EXCLUDE_COUNTRIES_PROP = {
+    "type": "string",
+    "description": (
+        "Comma-separated countries to exclude. Same values as `countries` "
+        "(ISO codes, English names, or region shortcuts)."
+    ),
+}
+
+EMPLOYEE_MIN_PROP = {
+    "type": "integer",
+    "description": "Minimum company employee count (inclusive)",
+    "minimum": 0,
+}
+
+EMPLOYEE_MAX_PROP = {
+    "type": "integer",
+    "description": (
+        "Maximum company employee count (inclusive). Example: 10 for micro "
+        "companies. Rows with unknown headcount are excluded."
+    ),
+    "minimum": 0,
+}
+
+FOUNDED_MIN_PROP = {"type": "integer", "description": "Minimum founded year (e.g. 2020)"}
+FOUNDED_MAX_PROP = {"type": "integer", "description": "Maximum founded year (e.g. 2025)"}
+
+COMPANY_DOMAIN_LIST_PROP = {
+    "type": "string",
+    "description": (
+        "Company website domain(s), comma-separated, up to 50 per call "
+        "(strict canonical match, e.g. 'stripe.com,vercel.com'). Checking a "
+        "whole pool of up to 50 domains costs ONE credit — use this to test a "
+        "funded list for open roles."
+    ),
+}
+
+COMPANY_LINKEDIN_LIST_PROP = {
+    "type": "string",
+    "description": (
+        "Company LinkedIn page URL(s), comma-separated, up to 50 per call "
+        "(strict canonical match, e.g. 'https://www.linkedin.com/company/stripe'). "
+        "One credit for the whole list."
+    ),
+}
+
+DATE_FROM_PROP = {"type": "string", "description": "Start date in YYYY-MM-DD format"}
+DATE_TO_PROP = {"type": "string", "description": "End date in YYYY-MM-DD format"}
+DATE_PRESET_PROP = {
+    "type": "string",
+    "description": "Relative date shorthand (overrides dateFrom/dateTo)",
+    "enum": DATE_PRESETS,
+}
+
+CATEGORIES_PIPE_PROP = {
+    "type": "string",
+    "description": (
+        "Pipe-separated LinkedIn industry labels "
+        "(e.g. 'Software Development|Financial Services')"
+    ),
+}
+
+SUBCATEGORIES_PROP = {
+    "type": "string",
+    "description": (
+        "Comma-separated Signalbase categories, multi-select (e.g. 'ai,fintech,saas'). "
+        f"Allowed values: {', '.join(SUBCATEGORIES)}."
+    ),
+}
+
+POSITIONS_PROP = {
+    "type": "string",
+    "description": (
+        "Comma-separated positions (e.g. 'cto,head of engineering'). "
+        f"Known values: {', '.join(POSITIONS)}."
+    ),
+}
+
+DEPARTMENTS_PROP = {
+    "type": "string",
+    "description": (
+        "Comma-separated departments (e.g. 'engineering,product'). "
+        f"Allowed values: {', '.join(DEPARTMENTS)}."
+    ),
+}
+
+SENIORITIES_PROP = {
+    "type": "string",
+    "description": (
+        "Comma-separated seniority levels (e.g. 'c_level,vp,head'). "
+        f"Allowed values: {', '.join(SENIORITIES)}."
+    ),
+}
+
+SORT_ORDER_PROP = {
+    "type": "string",
+    "description": "Sort direction",
+    "enum": ["asc", "desc"],
+}
+
+AMOUNT_MIN_PROP = {
+    "type": "integer",
+    "description": "Minimum round amount in whole USD (e.g. 1000000 = $1M)",
+    "minimum": 0,
+}
+AMOUNT_MAX_PROP = {
+    "type": "integer",
+    "description": "Maximum round amount in whole USD",
+    "minimum": 0,
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -82,58 +259,41 @@ TOOLS = [
         "description": (
             "Search for real-time funding round signals. Returns companies that recently "
             "raised funding with round type, amount, investors, and company details. "
-            "Costs 1 credit per call."
+            "Costs 1 credit per executed search (even with 0 rows); count=true is free."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (default 1)",
-                    "minimum": 1,
-                    "default": 1,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Results per page, max 50 (default 20)",
-                    "minimum": 1,
-                    "maximum": 50,
-                    "default": 20,
-                },
+                "page": PAGE_PROP,
+                "limit": _limit_prop(50),
                 "search": {
                     "type": "string",
                     "description": "Free-text search by company name or industry keywords",
                 },
-                "countries": {
-                    "type": "string",
-                    "description": "Comma-separated country codes or region shortcuts (e.g. 'US,GB' or 'CEE,NORDICS')",
-                },
-                "categories": {
-                    "type": "string",
-                    "description": "Pipe-separated LinkedIn industry labels (e.g. 'Software Development|Financial Services')",
-                },
-                "subcategories": {
-                    "type": "string",
-                    "description": "Comma-separated Signalbase categories (e.g. 'ai,fintech,saas')",
-                    "enum": SUBCATEGORIES,
-                },
+                "countries": COUNTRIES_PROP,
+                "exclude_countries": EXCLUDE_COUNTRIES_PROP,
+                "categories": CATEGORIES_PIPE_PROP,
+                "subcategories": SUBCATEGORIES_PROP,
                 "round": {
                     "type": "string",
-                    "description": "Comma-separated funding round types (e.g. 'Seed,Series A')",
+                    "description": (
+                        "Comma-separated funding round types (e.g. 'Seed,Series A'). "
+                        f"Allowed values: {', '.join(FUNDING_ROUND_TYPES)}."
+                    ),
                 },
-                "dateFrom": {
-                    "type": "string",
-                    "description": "Start date in YYYY-MM-DD format",
-                },
-                "dateTo": {
-                    "type": "string",
-                    "description": "End date in YYYY-MM-DD format",
-                },
-                "date_preset": {
-                    "type": "string",
-                    "description": "Relative date shorthand (overrides dateFrom/dateTo)",
-                    "enum": DATE_PRESETS,
-                },
+                "amount_min": AMOUNT_MIN_PROP,
+                "amount_max": AMOUNT_MAX_PROP,
+                "employee_count_min": EMPLOYEE_MIN_PROP,
+                "employee_count_max": EMPLOYEE_MAX_PROP,
+                "founded_year_min": FOUNDED_MIN_PROP,
+                "founded_year_max": FOUNDED_MAX_PROP,
+                "company_domain": COMPANY_DOMAIN_LIST_PROP,
+                "company_linkedin_url": COMPANY_LINKEDIN_LIST_PROP,
+                "dateFrom": DATE_FROM_PROP,
+                "dateTo": DATE_TO_PROP,
+                "date_preset": DATE_PRESET_PROP,
+                "count": COUNT_PROP,
+                "verbose": VERBOSE_PROP,
             },
         },
         "annotations": {
@@ -147,49 +307,34 @@ TOOLS = [
         "description": (
             "Search for acquisition and M&A signals. Returns companies showing "
             "acquisition indicators with signal scores and indicator details. "
-            "Costs 1 credit per call."
+            "Costs 1 credit per executed search (even with 0 rows); count=true is free."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (default 1)",
-                    "minimum": 1,
-                    "default": 1,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Results per page, max 50 (default 20)",
-                    "minimum": 1,
-                    "maximum": 50,
-                    "default": 20,
-                },
+                "page": PAGE_PROP,
+                "limit": _limit_prop(50),
                 "search": {
                     "type": "string",
                     "description": "Free-text search by company name or industry keywords",
                 },
-                "countries": {
-                    "type": "string",
-                    "description": "Comma-separated country codes or region shortcuts",
-                },
-                "categories": {
-                    "type": "string",
-                    "description": "Comma-separated company categories",
-                },
-                "dateFrom": {
-                    "type": "string",
-                    "description": "Start date in YYYY-MM-DD format",
-                },
-                "dateTo": {
-                    "type": "string",
-                    "description": "End date in YYYY-MM-DD format",
-                },
-                "date_preset": {
-                    "type": "string",
-                    "description": "Relative date shorthand (overrides dateFrom/dateTo)",
-                    "enum": DATE_PRESETS,
-                },
+                "countries": COUNTRIES_PROP,
+                "exclude_countries": EXCLUDE_COUNTRIES_PROP,
+                "categories": CATEGORIES_PIPE_PROP,
+                "subcategories": SUBCATEGORIES_PROP,
+                "amount_min": AMOUNT_MIN_PROP,
+                "amount_max": AMOUNT_MAX_PROP,
+                "employee_count_min": EMPLOYEE_MIN_PROP,
+                "employee_count_max": EMPLOYEE_MAX_PROP,
+                "founded_year_min": FOUNDED_MIN_PROP,
+                "founded_year_max": FOUNDED_MAX_PROP,
+                "company_domain": COMPANY_DOMAIN_LIST_PROP,
+                "company_linkedin_url": COMPANY_LINKEDIN_LIST_PROP,
+                "dateFrom": DATE_FROM_PROP,
+                "dateTo": DATE_TO_PROP,
+                "date_preset": DATE_PRESET_PROP,
+                "count": COUNT_PROP,
+                "verbose": VERBOSE_PROP,
             },
         },
         "annotations": {
@@ -203,48 +348,63 @@ TOOLS = [
         "description": (
             "Search for leadership and key-hire job change signals. Returns people "
             "who recently changed roles with person name, new role, company, and "
-            "LinkedIn URLs. Costs 1 credit per call."
+            "LinkedIn URLs. Costs 1 credit per executed search (even with 0 rows); "
+            "count=true is free."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (default 1)",
-                    "minimum": 1,
-                    "default": 1,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Results per page, max 50 (default 20)",
-                    "minimum": 1,
-                    "maximum": 50,
-                    "default": 20,
-                },
+                "page": PAGE_PROP,
+                "limit": _limit_prop(50),
                 "search": {
                     "type": "string",
                     "description": "Free-text search by company or person keywords",
                 },
-                "positions": {
+                "countries": {
                     "type": "string",
-                    "description": "Comma-separated positions (e.g. 'cto,head of engineering')",
+                    "description": (
+                        "Comma-separated countries matched against the person's country OR "
+                        "the company HQ. Accepts ISO codes, English names, or region shortcuts "
+                        f"{', '.join(COUNTRY_REGIONS)}. Unknown values return HTTP 400."
+                    ),
                 },
-                "departments": {
+                "exclude_countries": EXCLUDE_COUNTRIES_PROP,
+                "city": {
                     "type": "string",
-                    "description": "Comma-separated departments (e.g. 'engineering,product')",
+                    "description": "Free-text city match",
                 },
-                "seniorities": {
+                "company_name": {
                     "type": "string",
-                    "description": "Comma-separated seniority levels (e.g. 'c_level,vp,head')",
+                    "description": "Company name match",
                 },
-                "personLinkedinUrl": {
+                "company_domain": COMPANY_DOMAIN_LIST_PROP,
+                "company_linkedin_url": COMPANY_LINKEDIN_LIST_PROP,
+                "companyLinkedinUrl": {
+                    "type": "string",
+                    "description": "Deprecated alias of company_linkedin_url (single exact URL).",
+                },
+                "person_linkedin_url": {
                     "type": "string",
                     "description": "Exact LinkedIn profile URL of the person",
                 },
-                "companyLinkedinUrl": {
+                "new_role": {
                     "type": "string",
-                    "description": "Exact LinkedIn company page URL",
+                    "description": "Free-text match on the new role title (e.g. 'Chief Technology Officer')",
                 },
+                "positions": POSITIONS_PROP,
+                "departments": DEPARTMENTS_PROP,
+                "seniorities": SENIORITIES_PROP,
+                "dateFrom": DATE_FROM_PROP,
+                "dateTo": DATE_TO_PROP,
+                "date_preset": DATE_PRESET_PROP,
+                "sort_by": {
+                    "type": "string",
+                    "description": "Sort field",
+                    "enum": ["occurred_at", "discovered_at", "person_name", "company_name"],
+                },
+                "sort_order": SORT_ORDER_PROP,
+                "count": COUNT_PROP,
+                "verbose": VERBOSE_PROP,
             },
         },
         "annotations": {
@@ -257,33 +417,46 @@ TOOLS = [
         "name": "search_hiring_signals",
         "description": (
             "Search for hiring signals (open job postings). Returns active job listings "
-            "with title, location, company details, applicant counts, and seniority info. "
-            "Costs 1 credit per call. Use count=true to get total count without credits."
+            "with title, location, jobUrl, validThrough, company details, applicant counts, "
+            "and seniority info. Expired postings are excluded by default. "
+            "Costs 1 credit per executed search (even with 0 rows); count=true is free. "
+            "Coverage is ~84% US job locations: for non-US targets filter by company HQ "
+            "(company_countries) or by a company_domain list, not by job location alone."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (default 1)",
-                    "minimum": 1,
-                    "default": 1,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Results per page, max 100 (default 20)",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "default": 20,
-                },
+                "page": PAGE_PROP,
+                "limit": _limit_prop(100),
                 "search": {
                     "type": "string",
                     "description": "Free-text search across company name, industry, job title, location, and city",
                 },
                 "countries": {
                     "type": "string",
-                    "description": "Comma-separated country codes",
+                    "description": (
+                        "Comma-separated countries matched against the JOB LOCATION OR the "
+                        "COMPANY HQ (either matches). Accepts ISO codes, English names, or "
+                        f"region shortcuts {', '.join(COUNTRY_REGIONS)}. Unknown values return "
+                        "HTTP 400. Use job_countries / company_countries to pin one side."
+                    ),
                 },
+                "job_countries": {
+                    "type": "string",
+                    "description": (
+                        "Comma-separated countries matched against the job location only "
+                        "(same values as `countries`)."
+                    ),
+                },
+                "company_countries": {
+                    "type": "string",
+                    "description": (
+                        "Comma-separated countries matched against the company HQ only "
+                        "(same values as `countries`). Recommended for European targets, "
+                        "since most job locations in the index are US."
+                    ),
+                },
+                "exclude_countries": EXCLUDE_COUNTRIES_PROP,
                 "states": {
                     "type": "string",
                     "description": "Comma-separated US state codes (e.g. 'CA,NY,TX')",
@@ -292,61 +465,51 @@ TOOLS = [
                     "type": "string",
                     "description": "Free-text city/location search",
                 },
-                "categories": {
+                "company_name": {
                     "type": "string",
-                    "description": "Pipe-separated company industry categories",
+                    "description": "Company name match",
                 },
-                "subcategories": {
-                    "type": "string",
-                    "description": "Comma-separated Signalbase categories",
-                },
-                "positions": {
-                    "type": "string",
-                    "description": "Comma-separated positions to filter by",
-                },
-                "departments": {
-                    "type": "string",
-                    "description": "Comma-separated departments to filter by",
-                },
-                "seniorities": {
-                    "type": "string",
-                    "description": "Comma-separated seniority levels to filter by",
-                },
+                "company_domain": COMPANY_DOMAIN_LIST_PROP,
+                "company_linkedin_url": COMPANY_LINKEDIN_LIST_PROP,
+                "categories": CATEGORIES_PIPE_PROP,
+                "subcategories": SUBCATEGORIES_PROP,
+                "positions": POSITIONS_PROP,
+                "departments": DEPARTMENTS_PROP,
+                "seniorities": SENIORITIES_PROP,
                 "team_size": {
                     "type": "string",
-                    "description": "Comma-separated team size ranges (e.g. '51-200,201-1000')",
+                    "description": (
+                        "Comma-separated COMPANY size ranges (whole company, not the team). "
+                        f"Allowed values: {', '.join(TEAM_SIZE_RANGES)}. "
+                        "Example: team_size='1-10' for micro companies, '1-10,11-50' for up to 50."
+                    ),
                 },
                 "applicants": {
                     "type": "string",
-                    "description": "Comma-separated applicant count ranges (e.g. '0-25,26-50')",
+                    "description": (
+                        "Comma-separated applicant count ranges. "
+                        f"Allowed values: {', '.join(APPLICANT_RANGES)}."
+                    ),
                 },
-                "dateFrom": {
-                    "type": "string",
-                    "description": "Start date in YYYY-MM-DD format",
+                "include_expired": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: postings whose validThrough date has passed are "
+                        "excluded. Pass true to include expired postings (historical analysis)."
+                    ),
+                    "default": False,
                 },
-                "dateTo": {
-                    "type": "string",
-                    "description": "End date in YYYY-MM-DD format",
-                },
-                "date_preset": {
-                    "type": "string",
-                    "description": "Relative date shorthand (overrides dateFrom/dateTo)",
-                    "enum": DATE_PRESETS,
-                },
+                "dateFrom": DATE_FROM_PROP,
+                "dateTo": DATE_TO_PROP,
+                "date_preset": DATE_PRESET_PROP,
                 "sort_by": {
                     "type": "string",
                     "description": "Sort field",
                     "enum": ["date_posted", "created_at", "title", "company_name", "location"],
                 },
-                "sort_order": {
-                    "type": "string",
-                    "description": "Sort direction",
-                    "enum": ["asc", "desc"],
-                },
-                "count": {
-                    "type": "boolean",
-                    "description": "If true, returns only total count (no credits deducted)",
-                },
+                "sort_order": SORT_ORDER_PROP,
+                "count": COUNT_PROP,
+                "verbose": VERBOSE_PROP,
             },
         },
         "annotations": {
@@ -360,36 +523,50 @@ TOOLS = [
         "description": (
             "Search for investors — VCs, angels, PE firms, accelerators, and more. "
             "Returns investor profiles with AUM, investment focus, check sizes, portfolio "
-            "details, and contact info. Costs 1 credit per call."
+            "details, and contact info. Costs 1 credit per executed search (even with 0 rows); "
+            "count=true is free."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (default 1)",
-                    "minimum": 1,
-                    "default": 1,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Results per page, max 50 (default 20)",
-                    "minimum": 1,
-                    "maximum": 50,
-                    "default": 20,
-                },
+                "page": PAGE_PROP,
+                "limit": _limit_prop(50),
                 "search": {
                     "type": "string",
                     "description": "Free-text search by investor name or description",
                 },
-                "countries": {
-                    "type": "string",
-                    "description": "Comma-separated country codes",
-                },
+                "countries": COUNTRIES_PROP,
+                "exclude_countries": EXCLUDE_COUNTRIES_PROP,
                 "categories": {
                     "type": "string",
-                    "description": "Comma-separated investor types (e.g. 'vc,angel,pe')",
+                    "description": (
+                        "Comma-separated investor types (e.g. 'vc,angel,pe'). "
+                        f"Allowed values: {', '.join(INVESTOR_TYPES)}."
+                    ),
                 },
+                "type": {
+                    "type": "string",
+                    "description": (
+                        "Single investor type filter (alternative to `categories`). "
+                        f"Allowed values: {', '.join(INVESTOR_TYPES)}."
+                    ),
+                },
+                "headquarters": {
+                    "type": "string",
+                    "description": "Free-text headquarters (city/region) match, e.g. 'London'",
+                },
+                "ticket_size_min": {
+                    "type": "integer",
+                    "description": "Minimum typical check size in whole USD",
+                    "minimum": 0,
+                },
+                "ticket_size_max": {
+                    "type": "integer",
+                    "description": "Maximum typical check size in whole USD",
+                    "minimum": 0,
+                },
+                "count": COUNT_PROP,
+                "verbose": VERBOSE_PROP,
             },
         },
         "annotations": {
@@ -403,68 +580,45 @@ TOOLS = [
         "description": (
             "Search and browse the Signalbase company database independently of signals. "
             "Returns company profiles with headcount, industry, growth metrics, and more. "
-            "Costs 1 credit per call. Use count=true to get total count without credits."
+            "Costs 1 credit per executed search (even with 0 rows); count=true is free."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (default 1)",
-                    "minimum": 1,
-                    "default": 1,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Results per page, max 100 (default 20)",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "default": 20,
-                },
+                "page": PAGE_PROP,
+                "limit": _limit_prop(100),
                 "search": {
                     "type": "string",
                     "description": "Free-text search across name, industry, description, keywords, specialties",
                 },
-                "countries": {
-                    "type": "string",
-                    "description": "Comma-separated country codes",
-                },
+                "countries": COUNTRIES_PROP,
+                "exclude_countries": EXCLUDE_COUNTRIES_PROP,
+                "categories": CATEGORIES_PIPE_PROP,
+                "subcategories": SUBCATEGORIES_PROP,
                 "industry": {
                     "type": "string",
-                    "description": "Comma-separated industry names (exact match)",
+                    "description": "Comma-separated LinkedIn industry names (exact match)",
                 },
-                "employee_count_min": {
-                    "type": "integer",
-                    "description": "Minimum employee count",
-                    "minimum": 0,
+                "domain": {
+                    "type": "string",
+                    "description": "Company website domain (strict canonical match, e.g. 'stripe.com')",
                 },
-                "employee_count_max": {
-                    "type": "integer",
-                    "description": "Maximum employee count",
-                    "minimum": 0,
+                "linkedin_url": {
+                    "type": "string",
+                    "description": "Company LinkedIn page URL (strict canonical match)",
                 },
-                "founded_year_min": {
-                    "type": "integer",
-                    "description": "Minimum founded year",
-                },
-                "founded_year_max": {
-                    "type": "integer",
-                    "description": "Maximum founded year",
-                },
+                "employee_count_min": EMPLOYEE_MIN_PROP,
+                "employee_count_max": EMPLOYEE_MAX_PROP,
+                "founded_year_min": FOUNDED_MIN_PROP,
+                "founded_year_max": FOUNDED_MAX_PROP,
                 "sort_by": {
                     "type": "string",
                     "description": "Sort field",
                     "enum": ["name", "employee_count", "founded_year", "created_at"],
                 },
-                "sort_order": {
-                    "type": "string",
-                    "description": "Sort direction",
-                    "enum": ["asc", "desc"],
-                },
-                "count": {
-                    "type": "boolean",
-                    "description": "If true, returns only total count (no credits deducted)",
-                },
+                "sort_order": SORT_ORDER_PROP,
+                "count": COUNT_PROP,
+                "verbose": VERBOSE_PROP,
             },
         },
         "annotations": {
@@ -487,61 +641,75 @@ You have access to the Signalbase API through this MCP server. It provides real-
 business intelligence across six domains: funding rounds, acquisitions, job changes,
 hiring (open roles), investors, and companies.
 
-## Credit Costs
-Every tool call costs **1 credit** except:
-- `count=true` on hiring and companies tools (0 credits, returns total count only)
+## Credits
+- Every EXECUTED search costs **1 credit**, including searches that return 0 rows.
+- `count=true` is free on ALL six tools (0 credits) and returns only the total count.
+- Always size a query with `count=true` before paying for it; refine filters until the
+  count is useful, then run the paid search once with the largest sensible `limit`.
+- A `company_domain` / `company_linkedin_url` list of up to 50 entries is ONE search
+  (one credit) — never loop one credit per company.
+
+## Countries
+- `countries` / `exclude_countries` accept ISO 3166-1 alpha-2 codes (`US,GB,DE`),
+  English names (`Sweden`), or region shortcuts `EU`, `EUROPE`, `DACH`, `BENELUX`,
+  `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`. Values are comma-separated; unknown values
+  return HTTP 400 with a hint — fix the value, do not retry blindly.
+- Hiring: `countries` matches the JOB LOCATION **or** the COMPANY HQ. Use
+  `job_countries` (location only) or `company_countries` (HQ only) to pin one side.
+- Job changes: `countries` matches the person's country or the company HQ.
+
+## Hiring coverage warning
+- The hiring index is ~84% US job locations. For European or other non-US targets do
+  NOT filter by job location alone: use `company_countries=<region>` (+ `team_size`),
+  or the funded-pool workflow below (`company_domain` list).
+- Expired postings are excluded by default; pass `include_expired=true` only for
+  historical analysis. Every row carries `jobUrl` and `validThrough`.
 
 ## Key Workflows
 
-### 1. Market Research
-Start with `search_funding_signals` filtered by subcategory and date to find recently
-funded companies. Then use `search_companies` to get deeper profiles on interesting ones.
+### 1. Funded pool → who is hiring (recommended for "raised recently AND hiring X")
+1. `search_funding_signals` with `countries`, `employee_count_max`, `date_preset`
+   and `count=true` (free); then the same filters with `limit=50` (page if needed).
+2. Collect each row's `companyWebsite` domain.
+3. `search_hiring_signals` with `company_domain=<up to 50 domains>`,
+   `departments=<dept>`, `limit=100`, `sort_by=date_posted` — one credit per chunk of 50.
+4. Independent lane: `search_hiring_signals` with `company_countries=<region>`,
+   `team_size=1-10`, `departments=<dept>` catches companies whose round was missed.
+   (The `funded-and-hiring` prompt scripts this.)
 
-### 2. Sales Prospecting
-Use `search_hiring_signals` to find companies actively hiring for roles your product
-serves. Combine with `search_funding_signals` (date_preset=last_30d) to find newly
-funded companies with budget to spend.
+### 2. Market Research
+`search_funding_signals` filtered by subcategory/date, then `search_companies`
+(`domain=` or `search=`) for deeper profiles.
 
 ### 3. Investor Lookup
-Use `search_investors` to find VCs/angels by type and geography. Cross-reference with
-`search_funding_signals` to see their recent investments.
+`search_investors` by type/geography; cross-reference `search_funding_signals`.
 
 ### 4. Leadership Change Monitoring
-Use `search_job_change_signals` with seniority=c_level to track C-suite movements.
-New leaders often bring new vendor relationships.
+`search_job_change_signals` with `seniorities=c_level` (word-boundary matched; a
+"Director of Sales" is not c_level). New leaders often bring new vendor relationships.
 
 ### 5. Competitive Intelligence
-Use `search_acquisition_signals` to track M&A activity in a sector. Combine with
-`search_companies` to profile the acquirers and targets.
+`search_acquisition_signals` for M&A in a sector; profile parties with `search_companies`.
 
-## Important Tips
-
-### Countries
-- Use ISO 3166-1 alpha-2 codes: US, GB, DE, FR, etc.
-- Region shortcuts available: CEE, WE, NORDICS, NA, LATAM
-- Multiple values are comma-separated: `countries=US,GB,DE`
-
-### Categories vs Subcategories
+## Filter semantics
 - `categories` = LinkedIn industry labels, pipe-separated: `Software Development|Financial Services`
-- `subcategories` = Signalbase categories, comma-separated: `ai,fintech,saas`
-- These are different classification systems — use both for precision.
+- `subcategories` = Signalbase categories, comma-separated multi-select: `ai,fintech,saas`
+- `team_size` (hiring) = whole-company size ranges `1-10,11-50,51-200,201-1000,1000-plus`
+- `employee_count_min/max` (funding, acquisitions, companies) = exact headcount bounds
+- `date_preset` overrides `dateFrom`/`dateTo`; absolute dates are YYYY-MM-DD
+- Amounts are whole USD integers (5000000 = $5M)
 
-### Date Filtering
-- Use `date_preset` for relative ranges (e.g. `last_30d`, `this_quarter`)
-- `date_preset` overrides `dateFrom`/`dateTo` when both are provided
-- For absolute ranges, use `dateFrom` and `dateTo` in YYYY-MM-DD format
+## Response size
+- By default responses are trimmed: long text fields are cut to 300 chars, logo/image
+  URLs are dropped, and `_meta.trimmed=true` is added. Links (`jobUrl`, `sources`,
+  LinkedIn URLs, `companyWebsite`) and `validThrough` are always kept.
+- Pass `verbose=true` to get the full payload. `verbose` is handled by this server and
+  never sent to the API.
 
-### Pagination
-- Default page size is 20; max varies by endpoint (50 or 100)
-- Always check `pagination.hasNextPage` before fetching more
-- Use `count=true` first (on hiring/companies) to preview result size without spending credits
-
-### Boolean Parameters
-- The `count` parameter should be sent as `true` (string) in the URL
-
-### Amounts
-- All funding amounts are stored as whole USD integers (e.g. 5000000 = $5M)
-- Currency field is an exact-match filter, not a converter
+## Pagination
+- Default page size is 20; max is 50 (funding, acquisitions, job changes, investors)
+  or 100 (hiring, companies). Check `pagination.hasNextPage` before fetching more —
+  every page is a paid search.
 """
 
 # ──────────────────────────────────────────────────────────────
@@ -549,6 +717,36 @@ Use `search_acquisition_signals` to track M&A activity in a sector. Combine with
 # ──────────────────────────────────────────────────────────────
 
 PROMPTS = [
+    {
+        "name": "funded-and-hiring",
+        "description": (
+            "Companies in a geography, under a headcount cap, that raised funding in a "
+            "window AND have live job postings in a department — with posting links. "
+            "Uses the credit-efficient funding → hiring-by-domain workflow."
+        ),
+        "arguments": [
+            {
+                "name": "geography",
+                "description": "Country codes, names, or region (default 'EU'; e.g. 'NORDICS', 'DE,AT,CH', 'US')",
+                "required": False,
+            },
+            {
+                "name": "max_employees",
+                "description": "Maximum company headcount (default 10)",
+                "required": False,
+            },
+            {
+                "name": "department",
+                "description": "Hiring department to look for (default 'sales'; e.g. 'engineering', 'marketing')",
+                "required": False,
+            },
+            {
+                "name": "window",
+                "description": "Funding date preset (default 'last_90d'; e.g. 'last_30d', 'last_6m')",
+                "required": False,
+            },
+        ],
+    },
     {
         "name": "market-scan",
         "description": "Scan a market sector for recent activity — funding, hiring, and M&A signals",
@@ -619,7 +817,57 @@ PROMPTS = [
 # Prompt template content
 # ──────────────────────────────────────────────────────────────
 
+
+def _team_size_for_max(max_employees) -> str:
+    """Map a headcount cap onto the hiring `team_size` ranges (comma-joined)."""
+    try:
+        cap = int(str(max_employees).strip())
+    except (TypeError, ValueError):
+        return "1-10"
+    lower_bounds = [1, 11, 51, 201, 1000]
+    chosen = [r for r, low in zip(TEAM_SIZE_RANGES, lower_bounds) if low <= cap]
+    return ",".join(chosen) if chosen else "1-10"
+
+
+def _funded_and_hiring_prompt(args: dict) -> dict:
+    geo = str(args.get("geography") or "EU").strip()
+    max_emp = str(args.get("max_employees") or "10").strip()
+    dept = str(args.get("department") or "sales").strip()
+    window = str(args.get("window") or "last_90d").strip()
+    team_size = _team_size_for_max(max_emp)
+    text = (
+        f"Find companies in **{geo}** with at most **{max_emp}** employees that raised "
+        f"funding in the window `{window}` and are currently hiring in **{dept}**, "
+        "with live posting links.\n\n"
+        "Credit rules: every executed search costs 1 credit even with 0 rows; "
+        "count=true is free on every tool. The hiring index is ~84% US job locations, "
+        "so never filter non-US targets by job location alone.\n\n"
+        "Steps:\n"
+        f"1. Size the funded pool for free: search_funding_signals with countries={geo}, "
+        f"employee_count_max={max_emp}, date_preset={window}, count=true. "
+        f"Then pull it: search_funding_signals with countries={geo}, "
+        f"employee_count_max={max_emp}, date_preset={window}, limit=50 "
+        "(page through while pagination.hasNextPage is true).\n"
+        "2. From each funding row collect the companyWebsite domain (strip protocol, "
+        "www and paths), keeping companyName, roundType, fundingAmount and announcedDate "
+        "for the output.\n"
+        "3. Check the pool for open roles, one credit per chunk of 50 domains: "
+        f"search_hiring_signals with company_domain=<up to 50 domains, comma-separated>, "
+        f"departments={dept}, limit=100, sort_by=date_posted, sort_order=desc. "
+        "Expired postings are already excluded; do not pass include_expired.\n"
+        "4. Independent lane to catch companies whose round we missed: "
+        f"search_hiring_signals with company_countries={geo}, team_size={team_size}, "
+        f"departments={dept}, limit=100, sort_by=date_posted, sort_order=desc. "
+        "Merge with step 3 and dedupe by domain.\n"
+        "5. Output a table with columns: company | domain | round (type, amount, date, "
+        "or '-' for lane-4-only rows) | title | location | jobUrl | validThrough. "
+        "Keep only rows with a jobUrl, and state how many credits were spent."
+    )
+    return {"messages": [{"role": "user", "content": {"type": "text", "text": text}}]}
+
+
 PROMPT_TEMPLATES = {
+    "funded-and-hiring": _funded_and_hiring_prompt,
     "market-scan": lambda args: {
         "messages": [
             {
@@ -665,10 +913,10 @@ PROMPT_TEMPLATES = {
                     "text": (
                         f"Find sales prospects in the **{args.get('target_sector', 'saas')}** sector.\n\n"
                         "Steps:\n"
-                        f"1. Search funding signals with subcategories={args.get('target_sector', 'saas')} and date_preset=last_30d\n"
-                        f"2. Search hiring signals with subcategories={args.get('target_sector', 'saas')}"
-                        f"{' and departments=' + args['hiring_department'] if args.get('hiring_department') else ''}\n"
-                        "3. Cross-reference to find companies that are both recently funded AND actively hiring\n"
+                        f"1. Search funding signals with subcategories={args.get('target_sector', 'saas')} and date_preset=last_30d (limit=50)\n"
+                        "2. Collect the companyWebsite domains and search hiring signals with company_domain=<up to 50 domains>"
+                        f"{' and departments=' + args['hiring_department'] if args.get('hiring_department') else ''} — one credit per chunk\n"
+                        "3. The intersection is the list of companies that are both recently funded AND actively hiring\n"
                         "4. Rank them by funding amount and hiring volume"
                     ),
                 },
@@ -715,13 +963,15 @@ TOOL_ENDPOINTS = {
 
 def _build_query_string(params: dict) -> str:
     """Build a URL query string from a dict, skipping None values.
-    Converts Python booleans to lowercase strings for the API."""
+    Converts Python booleans to lowercase strings and joins lists with commas."""
     parts = []
     for k, v in params.items():
         if v is None:
             continue
         if isinstance(v, bool):
             v = "true" if v else "false"
+        elif isinstance(v, (list, tuple)):
+            v = ",".join(str(x) for x in v)
         parts.append(f"{_url_encode(str(k))}={_url_encode(str(v))}")
     return "&".join(parts)
 
@@ -751,6 +1001,56 @@ def _url_encode(s: str) -> str:
     return "".join(out)
 
 
+def _is_truthy(v) -> bool:
+    """Interpret a tool argument as a boolean (accepts 'true'/'false' strings)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes")
+    return bool(v)
+
+
+def _prepare_tool_args(tool_args) -> tuple:
+    """Pre-process tools/call arguments before forwarding to the API.
+
+    - pops the Worker-only `verbose` flag (the API returns 400 on unknown params)
+    - joins list-valued arguments with "," (the API takes comma-separated strings)
+    Returns (params_for_api, verbose).
+    """
+    args = dict(tool_args or {})
+    verbose = _is_truthy(args.pop("verbose", False))
+    for k, v in list(args.items()):
+        if isinstance(v, (list, tuple)):
+            args[k] = ",".join(str(x) for x in v)
+    return args, verbose
+
+
+def _trim_value(value):
+    """Recursively truncate long text fields and drop logo/image fields."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k in TRIM_DROP_FIELDS:
+                continue
+            if k in TRIM_TEXT_FIELDS and isinstance(v, str) and len(v) > TRIM_MAX_CHARS:
+                out[k] = v[:TRIM_MAX_CHARS] + "…"
+            else:
+                out[k] = _trim_value(v)
+        return out
+    if isinstance(value, list):
+        return [_trim_value(v) for v in value]
+    return value
+
+
+def _trim_response(data):
+    """Default (non-verbose) response shaping: shorter text, no logos, `_meta` hint.
+    Links (jobUrl, sources, LinkedIn URLs, companyWebsite) and validThrough are kept."""
+    trimmed = _trim_value(data)
+    if isinstance(trimmed, dict):
+        trimmed["_meta"] = dict(TRIM_META)
+    return trimmed
+
+
 def _json_response(data: dict, status: int = 200) -> Response:
     """Create a JSON Response with CORS headers."""
     body = JSON.stringify(to_js(data, dict_converter=Object.fromEntries))
@@ -772,12 +1072,31 @@ def _error_result(message: str) -> dict:
     }
 
 
-def _success_result(data) -> dict:
-    """Return an MCP tool success result with JSON-serialized data."""
+def _success_result(data, verbose: bool = False) -> dict:
+    """Return an MCP tool success result with JSON-serialized data.
+    Non-verbose (default): trimmed payload, compact JSON. Verbose: full payload, indented."""
     import json
+    if verbose:
+        text = json.dumps(data, indent=2, default=str, ensure_ascii=False)
+    else:
+        text = json.dumps(_trim_response(data), indent=None, separators=(",", ":"),
+                          default=str, ensure_ascii=False)
     return {
-        "content": [{"type": "text", "text": json.dumps(data, indent=2, default=str)}],
+        "content": [{"type": "text", "text": text}],
     }
+
+
+def _format_api_error(api_response: dict) -> str:
+    status = api_response.get("status", "unknown")
+    body = api_response.get("body", {})
+    if isinstance(body, dict):
+        msg = body.get("error", body.get("message", str(body)))
+        hint = body.get("hint") or body.get("details")
+        if hint and str(hint) not in str(msg):
+            msg = f"{msg} ({hint})"
+    else:
+        msg = str(body)
+    return f"API error (HTTP {status}): {msg}"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -823,7 +1142,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str) -> dict:
     """Route a JSON-RPC 2.0 request to the appropriate handler."""
     method = request_body.get("method", "")
     req_id = request_body.get("id")
-    params = request_body.get("params", {})
+    params = request_body.get("params", {}) or {}
 
     if method == "initialize":
         result = {
@@ -851,7 +1170,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str) -> dict:
     elif method == "prompts/get":
         prompt_name = params.get("name", "")
         if prompt_name in PROMPT_TEMPLATES:
-            prompt_args = params.get("arguments", {})
+            prompt_args = params.get("arguments", {}) or {}
             result = PROMPT_TEMPLATES[prompt_name](prompt_args)
         else:
             return {
@@ -865,7 +1184,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str) -> dict:
 
     elif method == "tools/call":
         tool_name = params.get("name", "")
-        tool_args = params.get("arguments", {})
+        tool_args = params.get("arguments", {}) or {}
 
         if tool_name not in TOOL_ENDPOINTS:
             return {
@@ -884,15 +1203,13 @@ async def _handle_jsonrpc(request_body: dict, api_key: str) -> dict:
             )
         else:
             endpoint = TOOL_ENDPOINTS[tool_name]
-            api_response = await _call_api(endpoint, tool_args, api_key)
+            api_params, verbose = _prepare_tool_args(tool_args)
+            api_response = await _call_api(endpoint, api_params, api_key)
 
             if isinstance(api_response, dict) and api_response.get("error") is True:
-                status = api_response.get("status", "unknown")
-                body = api_response.get("body", {})
-                msg = body.get("error", body.get("message", str(body))) if isinstance(body, dict) else str(body)
-                result = _error_result(f"API error (HTTP {status}): {msg}")
+                result = _error_result(_format_api_error(api_response))
             else:
-                result = _success_result(api_response)
+                result = _success_result(api_response, verbose=verbose)
 
     elif method == "ping":
         result = {}

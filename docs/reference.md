@@ -60,12 +60,20 @@ vc, angel, pe, corporate, government, accelerator,
 family_office, hedge_fund, crowdfunding
 ```
 
+## Country Values
+
+`countries`, `exclude_countries`, and hiring's `job_countries` / `company_countries` accept a comma-separated mix of ISO 3166-1 alpha-2 codes, English country names (e.g. `Sweden`, `United Kingdom`), and the region shortcuts below. Unknown values return HTTP 400 listing the unresolved tokens.
+
 ## Country Regions
 
 ```
+EU       — European Union (27 member states)
+EUROPE   — All of Europe (EU plus UK, CH, NO, IS, Balkans, etc.)
+DACH     — Germany, Austria, Switzerland
+BENELUX  — Belgium, Netherlands, Luxembourg
+NORDICS  — Denmark, Finland, Iceland, Norway, Sweden
 CEE      — Central & Eastern Europe
 WE       — Western Europe
-NORDICS  — Nordic countries
 NA       — North America
 LATAM    — Latin America
 ```
@@ -141,9 +149,27 @@ asc, desc
 
 ## Team Size Ranges (Hiring)
 
+Whole-company size, not the hiring team. Numeric ranges, comma-separable:
+
 ```
 1-10, 11-50, 51-200, 201-1000, 1000-plus
 ```
+
+## Company Identifier Lists
+
+`company_domain` and `company_linkedin_url` (funding, acquisitions, job changes, hiring) accept comma-separated lists of up to 50 entries, strict canonical match. One search = one credit regardless of list length.
+
+## Worker-only Parameters
+
+```
+verbose  — true returns the full API payload; default trims long text to 300
+           chars, drops logo/image fields and adds _meta.trimmed=true.
+           Never forwarded to the API.
+```
+
+## Credits
+
+Every executed search costs 1 credit, including 0-row results and each extra page. `count=true` is free on all six tools.
 
 ## Applicant Ranges (Hiring)
 

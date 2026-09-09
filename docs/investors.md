@@ -5,7 +5,7 @@
 Search for investors — VCs, angels, PE firms, accelerators, and more. Returns investor profiles with AUM, investment focus, check sizes, portfolio details, and contact info.
 
 **Endpoint:** `GET /signals/investors`
-**Cost:** 1 credit per call
+**Cost:** 1 credit per executed search (even with 0 rows); free with `count=true`
 
 ## Parameters
 
@@ -14,8 +14,15 @@ Search for investors — VCs, angels, PE firms, accelerators, and more. Returns 
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 50 (default 20) | `20` |
 | `search` | string | Free-text search by investor name or description | `"sequoia"` |
-| `countries` | string | Comma-separated country codes | `"US,GB,CA"` |
+| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`); unknown → 400 | `"US,GB,CA"` |
+| `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
 | `categories` | string | Comma-separated investor types | `"vc,angel"` |
+| `type` | string | Single investor type (alternative to `categories`) | `"vc"` |
+| `headquarters` | string | Free-text headquarters match | `"London"` |
+| `ticket_size_min` | integer | Minimum typical check size, whole USD | `250000` |
+| `ticket_size_max` | integer | Maximum typical check size, whole USD | `5000000` |
+| `count` | boolean | Return only the total count (free) | `true` |
+| `verbose` | boolean | Worker-only: return the full untrimmed payload | `true` |
 
 ## Investor Types
 
@@ -79,11 +86,17 @@ family_office, hedge_fund, crowdfunding
   "meta": {
     "endpoint": "signals.investors",
     "creditsUsed": 1
-  }
+  },
+  "_meta": {"trimmed": true, "hint": "pass verbose=true for full text"}
 }
 ```
 
 ## Common Workflows
+
+### Count seed VCs in the Nordics (free)
+```json
+{"categories": "vc", "countries": "NORDICS", "ticket_size_max": 2000000, "count": true}
+```
 
 ### Find VCs investing in AI
 ```json
@@ -92,7 +105,7 @@ family_office, hedge_fund, crowdfunding
 
 ### Find European angel investors
 ```json
-{"categories": "angel", "countries": "GB,DE,FR,NL,SE"}
+{"categories": "angel", "countries": "EU"}
 ```
 
 ### Find accelerators
@@ -106,3 +119,5 @@ family_office, hedge_fund, crowdfunding
 - `typicalCheckSize` provides `min` and `max` in USD
 - `activelyInvesting` indicates whether the firm is currently making new investments
 - The `categories` parameter for investors maps to **investor types** (vc, angel, pe), which is different from the `categories` parameter on signal endpoints (which maps to industry labels)
+- Every executed search costs 1 credit, even with 0 rows — size with `count=true` first (free)
+- `description` is truncated to 300 characters and logo fields are dropped unless `verbose=true`

@@ -5,7 +5,7 @@
 Search for real-time funding round signals. Returns companies that recently raised funding with round type, amount, investors, and company details.
 
 **Endpoint:** `GET /signals/funding`
-**Cost:** 1 credit per call
+**Cost:** 1 credit per executed search (even with 0 rows); free with `count=true`
 
 ## Parameters
 
@@ -14,13 +14,24 @@ Search for real-time funding round signals. Returns companies that recently rais
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 50 (default 20) | `20` |
 | `search` | string | Free-text search by company name or industry keywords | `"fintech"` |
-| `countries` | string | Comma-separated country codes or region shortcuts | `"US,GB"` or `"NORDICS"` |
+| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`); unknown → 400 | `"US,GB"` or `"NORDICS"` |
+| `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
 | `categories` | string | Pipe-separated LinkedIn industry labels | `"Software Development\|Financial Services"` |
-| `subcategories` | string | Comma-separated Signalbase categories | `"ai,fintech,saas"` |
+| `subcategories` | string | Comma-separated Signalbase categories (multi-select) | `"ai,fintech,saas"` |
 | `round` | string | Comma-separated funding round types | `"Seed,Series A"` |
+| `amount_min` | integer | Minimum round amount, whole USD | `1000000` |
+| `amount_max` | integer | Maximum round amount, whole USD | `20000000` |
+| `employee_count_min` | integer | Minimum company headcount | `2` |
+| `employee_count_max` | integer | Maximum company headcount (unknown headcount excluded) | `10` |
+| `founded_year_min` | integer | Minimum founded year | `2020` |
+| `founded_year_max` | integer | Maximum founded year | `2025` |
+| `company_domain` | string | Comma-separated domains, up to 50, strict canonical match | `"stripe.com,vercel.com"` |
+| `company_linkedin_url` | string | Comma-separated LinkedIn company URLs, up to 50 | `"https://www.linkedin.com/company/stripe"` |
 | `dateFrom` | string | Start date (YYYY-MM-DD) | `"2024-01-01"` |
 | `dateTo` | string | End date (YYYY-MM-DD) | `"2024-12-31"` |
 | `date_preset` | string | Relative date shorthand (overrides dateFrom/dateTo) | `"last_30d"` |
+| `count` | boolean | Return only the total count (free) | `true` |
+| `verbose` | boolean | Worker-only: return the full untrimmed payload | `true` |
 
 ## Round Types
 
@@ -82,11 +93,21 @@ Series F, Series G, Growth, Debt, Grant, IPO, Undisclosed
   "meta": {
     "endpoint": "signals.funding",
     "creditsUsed": 1
-  }
+  },
+  "_meta": {"trimmed": true, "hint": "pass verbose=true for full text"}
 }
 ```
 
 ## Common Workflows
+
+### Size a micro-company pool in Europe for free, then pull it
+```json
+{"countries": "EU", "employee_count_max": 10, "date_preset": "last_90d", "count": true}
+```
+```json
+{"countries": "EU", "employee_count_max": 10, "date_preset": "last_90d", "limit": 50}
+```
+Then feed the website domains to `search_hiring_signals` via `company_domain` (up to 50 per call, one credit).
 
 ### Find recently funded AI startups
 ```json
@@ -95,18 +116,19 @@ Series F, Series G, Growth, Debt, Grant, IPO, Undisclosed
 
 ### Track Series B+ rounds in Europe
 ```json
-{"countries": "WE,NORDICS,CEE", "round": "Series B,Series C,Series D", "date_preset": "last_90d"}
+{"countries": "EUROPE", "round": "Series B,Series C,Series D", "date_preset": "last_90d"}
 ```
 
 ### Search for a specific company's funding
 ```json
-{"search": "Stripe"}
+{"company_domain": "stripe.com"}
 ```
 
 ## Important Notes
 
 - **Amounts** are stored as whole USD integers (e.g. `15000000` = $15M)
-- **Currency** filter is an exact-match filter, not a converter — most records are USD
+- Every executed search costs 1 credit, even with 0 rows — size with `count=true` first (free)
 - The `categories` parameter uses pipe (`|`) separation, not commas
-- The `subcategories` parameter uses comma separation
+- The `subcategories` parameter uses comma separation (multi-select)
 - `date_preset` takes precedence over `dateFrom`/`dateTo`
+- Descriptions are truncated to 300 characters and logo fields dropped unless `verbose=true`

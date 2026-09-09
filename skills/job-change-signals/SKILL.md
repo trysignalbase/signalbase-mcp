@@ -7,7 +7,7 @@ argument-hint: "[role, department, seniority, person, or company]"
 # Job Change Signals Skill
 
 ## Tool: `search_job_change_signals`
-**Endpoint:** `GET /signals/job-changes` | **Cost:** 1 credit
+**Endpoint:** `GET /signals/job-changes` | **Cost:** 1 credit per executed search (0 rows still cost); `count=true` free
 
 ## Parameters
 
@@ -16,11 +16,23 @@ argument-hint: "[role, department, seniority, person, or company]"
 | `page` | integer | Page number (default 1) |
 | `limit` | integer | Results per page, max 50 |
 | `search` | string | Person or company keywords |
+| `countries` | string | Person country or company HQ. ISO codes, names, or regions `EU`, `DACH`, … (unknown → 400) |
+| `exclude_countries` | string | Same values, excluded |
+| `city` | string | City match |
+| `company_name` | string | Company name match |
+| `company_domain` | string | Comma-separated domains, up to 50, strict match |
+| `company_linkedin_url` | string | Comma-separated LinkedIn company URLs, up to 50 (`companyLinkedinUrl` is a deprecated single-value alias) |
+| `person_linkedin_url` | string | Exact LinkedIn profile URL |
+| `new_role` | string | Free-text match on the new title |
 | `positions` | string | Comma-separated: `cto,ceo,vp of engineering` |
 | `departments` | string | Comma-separated: `engineering,product` |
-| `seniorities` | string | Comma-separated: `c_level,vp,director` |
-| `personLinkedinUrl` | string | Exact LinkedIn profile URL |
-| `companyLinkedinUrl` | string | Exact LinkedIn company URL |
+| `seniorities` | string | Comma-separated: `c_level,vp,director` (word-boundary matched) |
+| `dateFrom` / `dateTo` | string | YYYY-MM-DD |
+| `date_preset` | string | Relative date shorthand |
+| `sort_by` | string | `occurred_at`, `discovered_at`, `person_name`, `company_name` |
+| `sort_order` | string | `asc` or `desc` |
+| `count` | boolean | Only the total count (free) |
+| `verbose` | boolean | Full untrimmed payload (Worker-only) |
 
 ## Enums
 
@@ -32,23 +44,24 @@ argument-hint: "[role, department, seniority, person, or company]"
 
 ## Example Workflows
 
-### Track all C-suite changes
+### C-suite changes in DACH this month
 ```json
-{"seniorities": "c_level"}
+{"seniorities": "c_level", "countries": "DACH", "date_preset": "this_month"}
 ```
 
 ### New CTOs
 ```json
-{"positions": "cto"}
+{"positions": "cto", "date_preset": "last_30d"}
 ```
 
-### Engineering leadership at a specific company
+### Engineering leadership across a list of companies (one credit)
 ```json
-{"companyLinkedinUrl": "https://www.linkedin.com/company/stripe", "departments": "engineering"}
+{"company_domain": "stripe.com,vercel.com", "departments": "engineering", "seniorities": "c_level,vp"}
 ```
 
 ## Gotchas
 
-- `seniorities=c_level` is broader than `positions=ceo` — it catches all C-suite roles
-- LinkedIn URLs must be exact matches
-- No date filtering available on this endpoint — results are sorted by recency
+- Every executed search costs 1 credit even with 0 rows — always `count=true` first
+- `seniorities=c_level` is broader than `positions=ceo` — it catches all C-suite roles, but word-boundary matching means "Director of Sales" is not `c_level`
+- LinkedIn URLs and domains are strict canonical matches
+- `personHeadline` is truncated to 300 chars unless `verbose=true`
