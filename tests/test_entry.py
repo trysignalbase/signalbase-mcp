@@ -429,7 +429,8 @@ def test_trim_drops_internal_ids_in_nested_lists():
 def test_resolve_role_families_and_titles():
     assert entry._resolve_role("bdr") == {"positions": "bdr"}
     assert entry._resolve_role("SDR") == {"positions": "bdr"}
-    assert entry._resolve_role("account executive") == {"positions": "bdr"}
+    assert entry._resolve_role("account executive") == {"positions": "account executive"}
+    assert entry._resolve_role("ae") == {"positions": "account executive"}
     assert entry._resolve_role("Sales or business development") == {"departments": "sales"}
     assert entry._resolve_role("engineers") == {"departments": "engineering"}
     assert entry._resolve_role("head of sales") == {"positions": "head of sales"}
@@ -517,6 +518,7 @@ def test_hiring_rows_grouped_by_company():
     ]
     out = entry._trim_response({"success": True, "data": rows, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}})
     assert out["companiesTotal"] == 2
+    assert out["data"] == [] and out["rowsOnPage"] == 4
     trove = next(c for c in out["companies"] if c["company"] == "Trove")
     assert trove["openRoles"] == 1 and trove["postings"][0]["locations"] == ["Encinitas, CA", "Sausalito, CA"]
     assert len(trove["postings"][0]["links"]) == 2

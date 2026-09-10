@@ -805,13 +805,12 @@ marketing…) match by department so free-text hiring posts are found; exact tit
 - Amounts are whole USD integers (5000000 = $5M)
 
 ## Presenting hiring results
-Trimmed hiring responses carry `companies[]`: one entry per company with `openRoles`
-and `postings[]` (same title in several cities = one posting with several locations).
-Answer "which companies are hiring X" from `companies`, not from raw `data` rows, and
-quote `companiesTotal` rather than the row count. `role="bdr"` (or sdr / account
-executive) means the rep-level sales family — reps, associates, specialists,
-executives — and deliberately excludes Director/Manager/Head/VP titles; say so if the
-user asks why a Director of Business Development is missing.
+Trimmed hiring responses replace the flat rows with `companies[]`: one entry per
+company with `openRoles` and `postings[]` (same title in several cities = one posting
+with several locations). `pagination` still counts postings; `companiesTotal` counts
+companies on this page. Pass `verbose=true` if you need raw rows. `role="bdr"` (or
+sdr) means the BDR/SDR role under its spellings and excludes Director/Manager/Head/VP
+titles and generic sales titles; use `role="sales"` for any sales role.
 
 ## Response size
 - By default responses are trimmed: long text fields are cut to 300 chars, logo/image
@@ -1170,9 +1169,9 @@ ROLE_FAMILIES = {
 
 # Titles that are precise enough to stay title matches (ordered: longest first).
 ROLE_TITLES = [
-    # rep-level sales-development family: the API expands these four keys to
-    # BDR/SDR/business development rep|associate|executive|specialist, inside
-    # sales, account executive — and excludes director/manager/head/VP titles.
+    # "bdr"/"sdr" → the API's BDR/SDR key: the role under its spellings (BDR,
+    # SDR, business/sales development rep or associate), leadership excluded.
+    # Account executive is its own title match.
     "bdr", "sdr", "business development representative", "sales development representative",
     "account executive", "ae",
     "founding account executive", "head of business development", "head of sales",
@@ -1191,7 +1190,11 @@ def _resolve_role(role: str) -> dict:
     departments, positions = [], []
     for part in parts:
         if part in ROLE_TITLES:
-            positions.append("bdr" if part in ("ae", "account executive", "sdr", "sales development representative", "business development representative") else part)
+            positions.append(
+                "bdr" if part in ("sdr", "sales development representative", "business development representative")
+                else "account executive" if part == "ae"
+                else part
+            )
             continue
         matched = None
         for dept, words in ROLE_FAMILIES.items():
@@ -1437,8 +1440,15 @@ def _trim_response(data):
         rows = trimmed.get("data")
         endpoint = (trimmed.get("meta") or {}).get("endpoint")
         if endpoint == "signals.hiring" and isinstance(rows, list) and rows:
+            # Grouped view replaces the flat rows (pass verbose=true for rows).
             trimmed["companies"] = _group_hiring_by_company(rows)
             trimmed["companiesTotal"] = len(trimmed["companies"])
+            trimmed["rowsOnPage"] = len(rows)
+            trimmed["data"] = []
+            trimmed["note"] = (
+                "Grouped per company from this page's rows; a company with postings "
+                "on several pages appears on each. pagination counts postings, not companies."
+            )
             changed[0] = True
         if changed[0]:
             trimmed["_meta"] = dict(TRIM_META)
