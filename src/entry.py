@@ -293,6 +293,23 @@ HEADCOUNT_MAX_PROP = {
         "Mapped to team_size / employee_count filters by the Worker."
     ),
 }
+GROUP_BY_COMPANY_PROP = {
+    "type": "boolean",
+    "default": False,
+    "description": (
+        "Hiring only. Add `companies[]` (one entry per company, postings merged by "
+        "title with their locations and links) next to the rows. Use for "
+        "'which companies are hiring X' questions."
+    ),
+}
+BY_COUNTRY_PROP = {
+    "type": "boolean",
+    "default": True,
+    "description": (
+        "On a free count over several countries, also return `byCountry` totals "
+        "(one extra free probe per country, max 6). Set false to skip."
+    ),
+}
 COUNTRY_SCOPE_PROP = {
     "type": "string",
     "enum": ["hq", "job", "either"],
@@ -518,6 +535,8 @@ TOOLS = [
                 "headcount_min": HEADCOUNT_MIN_PROP,
                 "headcount_max": HEADCOUNT_MAX_PROP,
                 "country_scope": COUNTRY_SCOPE_PROP,
+                "group_by_company": GROUP_BY_COMPANY_PROP,
+                "by_country": BY_COUNTRY_PROP,
                 "page": PAGE_PROP,
                 "limit": _limit_prop(100),
                 "search": {
@@ -767,7 +786,8 @@ hiring (open roles), investors, and companies.
 `search_hiring_signals` with `role="<role as the user said it>"`, `headcount_max=N-1`,
 `countries="<codes or regions>"`, `country_scope="hq"` (the user means where the company
 is), `count=true` first (free; a multi-country count returns `byCountry` so you can say
-which countries are empty), then the same without count, `limit=100`, `sort_by=date_posted`.
+which countries are empty), then the same without count plus `group_by_company=true`,
+`limit=100`, `sort_by=date_posted`.
 The Worker turns `role` into the right filter: role families (sales, BDR, engineers,
 marketing…) match by department so free-text hiring posts are found; exact titles
 (CTO, head of sales) match by title. Use `positions`/`departments` only for precise control.
@@ -805,10 +825,11 @@ marketing…) match by department so free-text hiring posts are found; exact tit
 - Amounts are whole USD integers (5000000 = $5M)
 
 ## Presenting hiring results
-Trimmed hiring responses replace the flat rows with `companies[]`: one entry per
-company with `openRoles` and `postings[]` (same title in several cities = one posting
-with several locations). `pagination` still counts postings; `companiesTotal` counts
-companies on this page. Pass `verbose=true` if you need raw rows. `role="bdr"` (or
+For "which companies are hiring X" pass `group_by_company=true` on hiring: the
+response then also carries `companies[]` (one entry per company, `openRoles`,
+`postings[]` with the same title in several cities merged into one posting). The flat
+rows stay in `data`; `pagination` counts postings, `companiesTotal` counts companies
+on this page. `role="bdr"` (or
 sdr) means the BDR/SDR role under its spellings and excludes Director/Manager/Head/VP
 titles and generic sales titles; use `role="sales"` for any sales role.
 
@@ -1206,6 +1227,12 @@ def _resolve_role(role: str) -> dict:
         else:
             positions.append(part)
     out = {}
+    if departments and positions:
+        # The API ANDs `positions` with `departments`. "bdr or engineers" is an
+        # OR, so keep everything on the title axis (positions are OR'd there);
+        # a department word becomes a title substring match.
+        out["positions"] = ",".join(dict.fromkeys(positions + [d.replace("_", " ") for d in departments]))
+        return out
     if departments:
         out["departments"] = ",".join(dict.fromkeys(departments))
     if positions:
@@ -1251,7 +1278,7 @@ def _resolve_intent_args(tool_name: str, args: dict) -> dict:
 
 
 COUNTRY_KEYS = ("countries", "company_countries", "job_countries")
-BREAKDOWN_MAX_TOKENS = 10
+BREAKDOWN_MAX_TOKENS = 6  # combined call + up to 6 free probes per count
 
 
 def _country_breakdown_plan(params: dict):
@@ -1279,13 +1306,21 @@ async def _with_country_breakdown(endpoint: str, params: dict, api_key: str, res
     for token in tokens:
         sub = dict(params)
         sub[key] = token
-        r = await _call_api(endpoint, sub, api_key)
         total = None
-        if isinstance(r, dict) and not r.get("error"):
-            total = (r.get("pagination") or {}).get("totalCount")
+        try:
+            r = await _call_api(endpoint, sub, api_key)
+            if isinstance(r, dict) and not r.get("error"):
+                total = (r.get("pagination") or {}).get("totalCount")
+        except Exception:
+            # A failed per-country probe must never spoil the successful
+            # combined count; report it as unknown instead.
+            total = None
         per[token.upper()] = total
     response["byCountry"] = per
     empty = [c for c, n in per.items() if n == 0]
+    unknown = [c for c, n in per.items() if n is None]
+    if unknown:
+        response["byCountryNote"] = f"Per-country probe failed for {', '.join(unknown)}; the combined total is unaffected."
     if empty:
         response["hint"] = (
             f"No rows for {', '.join(empty)} with these filters. "
@@ -1304,11 +1339,13 @@ def _prepare_tool_args(tool_args, tool_name: str = "") -> tuple:
     """
     args = dict(tool_args or {})
     verbose = _is_truthy(args.pop("verbose", False))
+    group_by_company = _is_truthy(args.pop("group_by_company", False))
+    by_country = _is_truthy(args.pop("by_country", True))
     for k, v in list(args.items()):
         if isinstance(v, (list, tuple)):
             args[k] = ",".join(str(x) for x in v)
     args = _resolve_intent_args(tool_name, args)
-    return args, verbose
+    return args, verbose, {"group_by_company": group_by_company, "by_country": by_country}
 
 
 def _decode_json_list(text: str):
@@ -1368,12 +1405,16 @@ def _trim_value(value, changed: list | None = None):
                     cleaned.append(_trim_value(item, changed))
                 out[k] = cleaned
             elif k in TRIM_JSON_STRING_FIELDS and isinstance(v, str):
+                # Type-stable: the API returns these as JSON text; a consumer
+                # parsing the string must keep working. Only de-duplicate.
                 decoded = _decode_json_list(v)
                 if decoded is None:
                     out[k] = v
                 else:
-                    out[k] = decoded
-                    mark()
+                    redone = json.dumps(decoded, ensure_ascii=False, separators=(",", ":"))
+                    if redone != v.strip():
+                        mark()
+                    out[k] = redone
             else:
                 out[k] = _trim_value(v, changed)
         return out
@@ -1429,7 +1470,7 @@ def _group_hiring_by_company(rows):
     return out
 
 
-def _trim_response(data):
+def _trim_response(data, group_by_company: bool = False):
     """Default (non-verbose) response shaping: shorter text, no logos.
     Links (jobUrl, sources, LinkedIn URLs, companyWebsite) and validThrough are kept.
     `_meta.trimmed` is only added when something was actually cut, so free
@@ -1439,12 +1480,11 @@ def _trim_response(data):
     if isinstance(trimmed, dict):
         rows = trimmed.get("data")
         endpoint = (trimmed.get("meta") or {}).get("endpoint")
-        if endpoint == "signals.hiring" and isinstance(rows, list) and rows:
-            # Grouped view replaces the flat rows (pass verbose=true for rows).
+        if group_by_company and endpoint == "signals.hiring" and isinstance(rows, list) and rows:
+            # Opt-in grouped view. `data` is kept so existing consumers that read
+            # rows keep working; the grouped view is an addition, not a swap.
             trimmed["companies"] = _group_hiring_by_company(rows)
             trimmed["companiesTotal"] = len(trimmed["companies"])
-            trimmed["rowsOnPage"] = len(rows)
-            trimmed["data"] = []
             trimmed["note"] = (
                 "Grouped per company from this page's rows; a company with postings "
                 "on several pages appears on each. pagination counts postings, not companies."
@@ -1476,14 +1516,14 @@ def _error_result(message: str) -> dict:
     }
 
 
-def _success_result(data, verbose: bool = False) -> dict:
+def _success_result(data, verbose: bool = False, group_by_company: bool = False) -> dict:
     """Return an MCP tool success result with JSON-serialized data.
     Non-verbose (default): trimmed payload, compact JSON. Verbose: full payload, indented."""
     import json
     if verbose:
         text = json.dumps(data, indent=2, default=str, ensure_ascii=False)
     else:
-        text = json.dumps(_trim_response(data), indent=None, separators=(",", ":"),
+        text = json.dumps(_trim_response(data, group_by_company), indent=None, separators=(",", ":"),
                           default=str, ensure_ascii=False)
     return {
         "content": [{"type": "text", "text": text}],
@@ -1607,14 +1647,15 @@ async def _handle_jsonrpc(request_body: dict, api_key: str) -> dict:
             )
         else:
             endpoint = TOOL_ENDPOINTS[tool_name]
-            api_params, verbose = _prepare_tool_args(tool_args, tool_name)
+            api_params, verbose, opts = _prepare_tool_args(tool_args, tool_name)
             api_response = await _call_api(endpoint, api_params, api_key)
-            api_response = await _with_country_breakdown(endpoint, api_params, api_key, api_response)
+            if opts["by_country"]:
+                api_response = await _with_country_breakdown(endpoint, api_params, api_key, api_response)
 
             if isinstance(api_response, dict) and api_response.get("error") is True:
                 result = _error_result(_format_api_error(api_response))
             else:
-                result = _success_result(api_response, verbose=verbose)
+                result = _success_result(api_response, verbose=verbose, group_by_company=opts["group_by_company"])
 
     elif method == "ping":
         result = {}

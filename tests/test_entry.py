@@ -55,7 +55,7 @@ def test_url_encode():
 # ──────────────────────────────────────────────────────────────
 
 def test_prepare_tool_args_pops_verbose_and_joins_lists():
-    params, verbose = entry._prepare_tool_args({
+    params, verbose, _opts = entry._prepare_tool_args({
         "verbose": True,
         "countries": ["SE", "NO", "DK"],
         "company_domain": ("a.com", "b.com"),
@@ -70,7 +70,7 @@ def test_prepare_tool_args_verbose_string_and_default():
     assert entry._prepare_tool_args({"verbose": "true"})[1] is True
     assert entry._prepare_tool_args({"verbose": "false"})[1] is False
     assert entry._prepare_tool_args({})[1] is False
-    assert entry._prepare_tool_args(None) == ({}, False)
+    assert entry._prepare_tool_args(None)[:2] == ({}, False)
 
 
 def test_tools_call_strips_verbose_before_call_api(monkeypatch):
@@ -404,7 +404,7 @@ def test_trim_caps_sources_and_decodes_json_lists():
     r = out["data"][0]
     assert len(r["sources"]) == 3 and r["sourcesTotal"] == 18
     assert r["sources"][0]["url"] == "https://x/0"
-    assert r["companyCategories"] == ["Manufacturing", "Software"]
+    assert r["companyCategories"] == '["Manufacturing","Software"]'  # still a JSON string, de-duplicated
     assert r["investors"] == [{"name": "A"}]
     assert out["_meta"]["trimmed"] is True
     # short lists and non-JSON strings are untouched
@@ -516,14 +516,66 @@ def test_hiring_rows_grouped_by_company():
         {"companyName": "Ploy", "companyCountry": "US", "companyEmployeeCount": 6, "companyWebsite": "ploy.io",
          "title": "SDR", "location": "NYC", "datePosted": "2026-06-17T00:00:00Z", "jobUrl": "https://l/4"},
     ]
-    out = entry._trim_response({"success": True, "data": rows, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}})
+    default = entry._trim_response({"success": True, "data": rows, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}})
+    assert "companies" not in default and len(default["data"]) == 4  # opt-in only
+    out = entry._trim_response({"success": True, "data": rows, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}}, group_by_company=True)
     assert out["companiesTotal"] == 2
-    assert out["data"] == [] and out["rowsOnPage"] == 4
+    assert len(out["data"]) == 4  # rows are kept next to the grouped view
     trove = next(c for c in out["companies"] if c["company"] == "Trove")
     assert trove["openRoles"] == 1 and trove["postings"][0]["locations"] == ["Encinitas, CA", "Sausalito, CA"]
     assert len(trove["postings"][0]["links"]) == 2
     ploy = next(c for c in out["companies"] if c["company"] == "Ploy")
     assert ploy["openRoles"] == 2
     # count-only and non-hiring responses are untouched
-    assert "companies" not in entry._trim_response({"data": [], "meta": {"endpoint": "signals.hiring"}})
-    assert "companies" not in entry._trim_response({"data": rows, "meta": {"endpoint": "signals.funding"}})
+    assert "companies" not in entry._trim_response({"data": [], "meta": {"endpoint": "signals.hiring"}}, group_by_company=True)
+    assert "companies" not in entry._trim_response({"data": rows, "meta": {"endpoint": "signals.funding"}}, group_by_company=True)
+
+
+def test_mixed_role_alternatives_stay_or():
+    out = entry._resolve_role("bdr or engineers")
+    assert "departments" not in out
+    assert out["positions"] == "bdr,engineering"
+
+
+def test_breakdown_tolerates_probe_failures(monkeypatch):
+    calls = []
+
+    async def fake_call_api(endpoint, params, api_key):
+        calls.append(dict(params))
+        c = params.get("company_countries", "")
+        if c == "AE":
+            raise RuntimeError("upstream fetch failed")
+        n = {"BE": 0, "US": 31, "BE,US,AE": 31}.get(c, 0)
+        return {"success": True, "data": [], "pagination": {"totalCount": n}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {
+        "countries": "BE,US,AE", "country_scope": "hq", "count": True}})
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["pagination"]["totalCount"] == 31
+    assert payload["byCountry"] == {"BE": 0, "US": 31, "AE": None}
+    assert "AE" in payload["byCountryNote"]
+
+
+def test_breakdown_can_be_switched_off(monkeypatch):
+    calls = []
+
+    async def fake_call_api(endpoint, params, api_key):
+        calls.append(dict(params))
+        return {"success": True, "data": [], "pagination": {"totalCount": 3}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "BE,US,AE", "count": True, "by_country": False}})
+    assert len(calls) == 1 and "by_country" not in calls[0]
+
+
+def test_group_by_company_via_tool_call(monkeypatch):
+    async def fake_call_api(endpoint, params, api_key):
+        assert "group_by_company" not in params
+        return {"success": True, "data": [{"companyName": "Ploy", "title": "BDR", "jobUrl": "https://l"}],
+                "pagination": {"totalCount": 1}, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "US", "group_by_company": True}})
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["companiesTotal"] == 1 and len(payload["data"]) == 1
