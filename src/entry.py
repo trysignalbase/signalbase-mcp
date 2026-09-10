@@ -730,7 +730,7 @@ hiring (open roles), investors, and companies.
 
 ## Response size
 - By default responses are trimmed: long text fields are cut to 300 chars, logo/image
-  URLs are dropped, and `_meta.trimmed=true` is added. Links (`jobUrl`, `sources`,
+  URLs are dropped, and `_meta.trimmed=true` is added when something was cut. Links (`jobUrl`, `sources`,
   LinkedIn URLs, `companyWebsite`) and `validThrough` are always kept.
 - Pass `verbose=true` to get the full payload. `verbose` is handled by this server and
   never sent to the API.
@@ -1054,28 +1054,36 @@ def _prepare_tool_args(tool_args) -> tuple:
     return args, verbose
 
 
-def _trim_value(value):
-    """Recursively truncate long text fields and drop logo/image fields."""
+def _trim_value(value, changed: list | None = None):
+    """Recursively truncate long text fields and drop logo/image fields.
+    `changed` (a one-element list) is set to [True] when anything was altered."""
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
             if k in TRIM_DROP_FIELDS:
+                if changed is not None:
+                    changed[:] = [True]
                 continue
             if k in TRIM_TEXT_FIELDS and isinstance(v, str) and len(v) > TRIM_MAX_CHARS:
                 out[k] = v[:TRIM_MAX_CHARS] + "…"
+                if changed is not None:
+                    changed[:] = [True]
             else:
-                out[k] = _trim_value(v)
+                out[k] = _trim_value(v, changed)
         return out
     if isinstance(value, list):
-        return [_trim_value(v) for v in value]
+        return [_trim_value(v, changed) for v in value]
     return value
 
 
 def _trim_response(data):
-    """Default (non-verbose) response shaping: shorter text, no logos, `_meta` hint.
-    Links (jobUrl, sources, LinkedIn URLs, companyWebsite) and validThrough are kept."""
-    trimmed = _trim_value(data)
-    if isinstance(trimmed, dict):
+    """Default (non-verbose) response shaping: shorter text, no logos.
+    Links (jobUrl, sources, LinkedIn URLs, companyWebsite) and validThrough are kept.
+    `_meta.trimmed` is only added when something was actually cut, so free
+    count=true responses and empty results stay clean."""
+    changed = [False]
+    trimmed = _trim_value(data, changed)
+    if isinstance(trimmed, dict) and changed[0]:
         trimmed["_meta"] = dict(TRIM_META)
     return trimmed
 

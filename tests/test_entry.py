@@ -383,3 +383,11 @@ def test_api_base_override_from_env():
         entry._resolve_api_base(_Env(API_BASE="http://localhost:3000/api/v2/"))
         == "http://localhost:3000/api/v2"
     )
+
+
+def test_trim_response_no_meta_when_nothing_trimmed():
+    # count=true / empty results carry no long text or logos → no _meta noise
+    out = entry._trim_response({"success": True, "data": [], "pagination": {"totalCount": 2}})
+    assert "_meta" not in out
+    out = entry._trim_response({"data": [{"companyName": "X", "description": "short"}]})
+    assert "_meta" not in out
