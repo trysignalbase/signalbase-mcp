@@ -369,3 +369,17 @@ def test_team_size_for_max():
     assert entry._team_size_for_max(200) == "1-10,11-50,51-200"
     assert entry._team_size_for_max(5000) == "1-10,11-50,51-200,201-1000,1000-plus"
     assert entry._team_size_for_max("abc") == "1-10"
+
+
+class _Env:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def test_api_base_override_from_env():
+    assert entry._resolve_api_base(None) == entry.API_BASE
+    assert entry._resolve_api_base(_Env()) == entry.API_BASE
+    assert (
+        entry._resolve_api_base(_Env(API_BASE="http://localhost:3000/api/v2/"))
+        == "http://localhost:3000/api/v2"
+    )

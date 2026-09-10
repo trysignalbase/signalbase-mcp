@@ -13,6 +13,23 @@ from js import Response, Headers, Object, fetch, JSON
 # ──────────────────────────────────────────────────────────────
 
 API_BASE = "https://www.trysignalbase.com/api/v2"
+# Overridable per request from the Worker env binding `API_BASE` (wrangler
+# `--var API_BASE:http://localhost:3000/api/v2` or `[env.local] vars`) so the
+# Worker can be pointed at a local checkout of the app for end-to-end testing.
+_api_base_override: str | None = None
+
+
+def _resolve_api_base(env=None) -> str:
+    """Pick the API base: explicit env binding > module default."""
+    value = None
+    if env is not None:
+        try:
+            value = getattr(env, "API_BASE", None)
+        except Exception:
+            value = None
+    if value:
+        return str(value).rstrip("/")
+    return API_BASE
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_NAME = "signalbase-mcp"
 SERVER_VERSION = "1.1.0"
@@ -1120,7 +1137,7 @@ async def _call_api(endpoint: str, params: dict, api_key: str) -> dict:
     import json as json_mod
 
     qs = _build_query_string(params)
-    url = f"{API_BASE}{endpoint}"
+    url = f"{_api_base_override or API_BASE}{endpoint}"
     if qs:
         url = f"{url}?{qs}"
 
@@ -1248,6 +1265,8 @@ async def _handle_jsonrpc(request_body: dict, api_key: str) -> dict:
 # ──────────────────────────────────────────────────────────────
 
 async def on_fetch(request, env):
+    global _api_base_override
+    _api_base_override = _resolve_api_base(env)
     if request.method == "OPTIONS":
         return Response.new("", to_js(
             {

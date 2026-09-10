@@ -10,3 +10,9 @@ enabled = true
 # [[routes]]
 # pattern = "mcp.yourdomain.com/*"
 # zone_name = "yourdomain.com"
+
+# Local end-to-end testing against a local checkout of the app:
+#   npx wrangler dev --env local --port 8787
+# (the app must be running on http://localhost:3000)
+[env.local]
+vars = { API_BASE = "http://localhost:3000/api/v2" }
