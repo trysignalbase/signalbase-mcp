@@ -415,3 +415,12 @@ def test_trim_caps_sources_and_decodes_json_lists():
     verbose = json.loads(entry._success_result({"data": [row]}, verbose=True)["content"][0]["text"])
     assert len(verbose["data"][0]["sources"]) == 18
     assert isinstance(verbose["data"][0]["companyCategories"], str)
+
+
+def test_trim_drops_internal_ids_in_nested_lists():
+    row = {"investors": [{"id": "uuid", "name": "Hi Inov", "type": "VC"}],
+           "sources": [{"url": "https://x", "isPrimary": True, "title": None}]}
+    out = entry._trim_response({"data": [row]})
+    assert out["data"][0]["investors"] == [{"name": "Hi Inov", "type": "VC"}]
+    assert out["data"][0]["sources"] == [{"url": "https://x", "title": None}]
+    assert out["_meta"]["trimmed"] is True

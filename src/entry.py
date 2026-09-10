@@ -103,6 +103,9 @@ TRIM_DROP_FIELDS = {
 # Evidence lists: keep the first few entries in trimmed mode (the API returns up
 # to ~20 per row, mostly duplicate coverage of the same announcement).
 TRIM_LIST_FIELDS = {"sources": 3}
+# Keys dropped from entries of these nested lists in trimmed mode (internal ids
+# an agent cannot use through the MCP).
+TRIM_NESTED_DROP = {"investors": {"id"}, "sources": {"isPrimary"}}
 # Fields the API returns as JSON text inside JSON ("[\"A\",\"B\"]"); decoded
 # and de-duplicated in trimmed mode so an LLM sees a real list.
 TRIM_JSON_STRING_FIELDS = {"companyCategories", "categories", "countries", "keywords", "specialties", "companySpecialties"}
@@ -1101,10 +1104,24 @@ def _trim_value(value, changed: list | None = None):
             if k in TRIM_TEXT_FIELDS and isinstance(v, str) and len(v) > TRIM_MAX_CHARS:
                 out[k] = v[:TRIM_MAX_CHARS] + "…"
                 mark()
-            elif k in TRIM_LIST_FIELDS and isinstance(v, list) and len(v) > TRIM_LIST_FIELDS[k]:
-                out[k] = [_trim_value(i, changed) for i in v[: TRIM_LIST_FIELDS[k]]]
-                out[f"{k}Total"] = len(v)
-                mark()
+            elif k in TRIM_LIST_FIELDS or k in TRIM_NESTED_DROP:
+                items = v if isinstance(v, list) else None
+                if items is None:
+                    out[k] = _trim_value(v, changed)
+                    continue
+                cap = TRIM_LIST_FIELDS.get(k)
+                if cap is not None and len(items) > cap:
+                    out[f"{k}Total"] = len(items)
+                    items = items[:cap]
+                    mark()
+                drop = TRIM_NESTED_DROP.get(k, set())
+                cleaned = []
+                for item in items:
+                    if isinstance(item, dict) and any(dk in item for dk in drop):
+                        item = {ik: iv for ik, iv in item.items() if ik not in drop}
+                        mark()
+                    cleaned.append(_trim_value(item, changed))
+                out[k] = cleaned
             elif k in TRIM_JSON_STRING_FIELDS and isinstance(v, str):
                 decoded = _decode_json_list(v)
                 if decoded is None:
