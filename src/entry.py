@@ -5,6 +5,7 @@ Provides funding signals, acquisition signals, job change signals,
 hiring signals, investor data, and company search via MCP tools.
 """
 
+import html
 import json
 import re
 from pyodide.ffi import to_js
@@ -1346,6 +1347,13 @@ def _trim_value(value, changed: list | None = None):
         return out
     if isinstance(value, list):
         return [_trim_value(v, changed) for v in value]
+    if isinstance(value, str) and "&" in value and ";" in value:
+        # Titles arrive HTML-escaped from some sources ("Sales &amp; Marketing").
+        decoded = html.unescape(value)
+        if decoded != value:
+            if changed is not None:
+                changed[:] = [True]
+            return decoded
     return value
 
 

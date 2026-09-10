@@ -487,3 +487,10 @@ def test_no_breakdown_for_paid_or_single_country(monkeypatch):
     _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "BE,US", "limit": 5}})
     _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "BE", "count": True}})
     assert len(calls) == 2
+
+
+def test_trim_unescapes_html_entities():
+    out = entry._trim_response({"data": [{"title": "Sales &amp; Marketing Lead", "companyName": "R&amp;D Co"}]})
+    assert out["data"][0]["title"] == "Sales & Marketing Lead"
+    assert out["data"][0]["companyName"] == "R&D Co"
+    assert out["_meta"]["trimmed"] is True
