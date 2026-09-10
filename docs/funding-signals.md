@@ -1,5 +1,7 @@
 # Funding Signals
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_funding_signals`
 
 Search for real-time funding round signals. Returns companies that recently raised funding with round type, amount, investors, and company details.
@@ -14,7 +16,7 @@ Search for real-time funding round signals. Returns companies that recently rais
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 50 (default 20) | `20` |
 | `search` | string | Free-text search by company name or industry keywords | `"fintech"` |
-| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`); unknown → 400 | `"US,GB"` or `"NORDICS"` |
+| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`); with `filter_version=2`: unknown → 400 | `"US,GB"` or `"NORDICS"` |
 | `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
 | `categories` | string | Pipe-separated LinkedIn industry labels | `"Software Development\|Financial Services"` |
 | `subcategories` | string | Comma-separated Signalbase categories (multi-select) | `"ai,fintech,saas"` |
@@ -131,4 +133,4 @@ Then feed the website domains to `search_hiring_signals` via `company_domain` (u
 - The `categories` parameter uses pipe (`|`) separation, not commas
 - The `subcategories` parameter uses comma separation (multi-select)
 - `date_preset` takes precedence over `dateFrom`/`dateTo`
-- Descriptions are truncated to 300 characters and logo fields dropped unless `verbose=true`
+- Descriptions are truncated to 300 characters and logo fields dropped only with `verbose=false`

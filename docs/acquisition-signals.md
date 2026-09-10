@@ -1,5 +1,7 @@
 # Acquisition Signals
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_acquisition_signals`
 
 Search for acquisition and M&A signals. Returns companies showing acquisition indicators with signal scores and details.
@@ -14,7 +16,7 @@ Search for acquisition and M&A signals. Returns companies showing acquisition in
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 50 (default 20) | `20` |
 | `search` | string | Free-text search by company name or keywords | `"tech"` |
-| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`); unknown → 400 | `"US,GB,CA"` |
+| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`); with `filter_version=2`: unknown → 400 | `"US,GB,CA"` |
 | `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
 | `categories` | string | Pipe-separated LinkedIn industry labels | `"Software Development\|Healthcare"` |
 | `subcategories` | string | Comma-separated Signalbase categories (multi-select) | `"saas,healthcare"` |

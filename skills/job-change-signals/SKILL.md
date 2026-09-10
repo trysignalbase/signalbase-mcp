@@ -6,6 +6,8 @@ argument-hint: "[role, department, seniority, person, or company]"
 
 # Job Change Signals Skill
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_job_change_signals`
 **Endpoint:** `GET /signals/job-changes` | **Cost:** 1 credit per executed search (0 rows still cost); `count=true` free
 
@@ -16,7 +18,7 @@ argument-hint: "[role, department, seniority, person, or company]"
 | `page` | integer | Page number (default 1) |
 | `limit` | integer | Results per page, max 50 |
 | `search` | string | Person or company keywords |
-| `countries` | string | Person country or company HQ. ISO codes, names, or regions `EU`, `DACH`, … (unknown → 400) |
+| `countries` | string | Person country or company HQ. ISO codes, names, or regions `EU`, `DACH`, … (with `filter_version=2`: unknown → 400) |
 | `exclude_countries` | string | Same values, excluded |
 | `city` | string | City match |
 | `company_name` | string | Company name match |
@@ -64,4 +66,4 @@ argument-hint: "[role, department, seniority, person, or company]"
 - Every executed search costs 1 credit even with 0 rows — always `count=true` first
 - `seniorities=c_level` is broader than `positions=ceo` — it catches all C-suite roles, but word-boundary matching means "Director of Sales" is not `c_level`
 - LinkedIn URLs and domains are strict canonical matches
-- `personHeadline` is truncated to 300 chars unless `verbose=true`
+- `personHeadline` is truncated to 300 chars only with `verbose=false`

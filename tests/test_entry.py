@@ -69,8 +69,8 @@ def test_prepare_tool_args_pops_verbose_and_joins_lists():
 def test_prepare_tool_args_verbose_string_and_default():
     assert entry._prepare_tool_args({"verbose": "true"})[1] is True
     assert entry._prepare_tool_args({"verbose": "false"})[1] is False
-    assert entry._prepare_tool_args({})[1] is False
-    assert entry._prepare_tool_args(None)[:2] == ({}, False)
+    assert entry._prepare_tool_args({})[1] is True
+    assert entry._prepare_tool_args(None)[:2] == ({}, True)
 
 
 def test_tools_call_strips_verbose_before_call_api(monkeypatch):
@@ -102,12 +102,12 @@ def test_tools_call_strips_verbose_before_call_api(monkeypatch):
     assert payload["data"][0]["companyLogo"] == "http://logo"
 
 
-def test_tools_call_default_is_trimmed_compact(monkeypatch):
+def test_tools_call_explicit_compact(monkeypatch):
     async def fake_call_api(endpoint, params, api_key):
         return {"success": True, "data": [{"companyName": "X", "companyLogo": "http://logo"}]}
 
     monkeypatch.setattr(entry, "_call_api", fake_call_api)
-    resp = _rpc("tools/call", {"name": "search_funding_signals", "arguments": {"limit": 1}})
+    resp = _rpc("tools/call", {"name": "search_funding_signals", "arguments": {"limit": 1, "verbose": False}})
     text = resp["result"]["content"][0]["text"]
     assert "\n" not in text
     payload = json.loads(text)
@@ -192,7 +192,7 @@ def test_trim_response_short_text_untouched():
 
 def test_success_result_modes():
     data = {"data": [{"description": "y" * 400, "logoUrl": "z"}]}
-    compact = entry._success_result(data)["content"][0]["text"]
+    compact = entry._success_result(data, verbose=False)["content"][0]["text"]
     verbose = entry._success_result(data, verbose=True)["content"][0]["text"]
     assert "\n" not in compact and "_meta" in compact and "logoUrl" not in compact
     assert "\n" in verbose and "_meta" not in verbose and "logoUrl" in verbose
@@ -259,7 +259,7 @@ def test_job_changes_schema_new_keys():
               "person_linkedin_url", "new_role", "dateFrom", "dateTo", "date_preset",
               "sort_by", "sort_order", "count", "verbose"):
         assert k in p, k
-    assert "personLinkedinUrl" not in p
+    assert "personLinkedinUrl" in p
 
 
 def test_hiring_schema_new_keys():
@@ -269,7 +269,7 @@ def test_hiring_schema_new_keys():
               "count", "verbose"):
         assert k in p, k
     assert p["include_expired"]["type"] == "boolean"
-    assert p["include_expired"]["default"] is False
+    assert "default" not in p["include_expired"]
     assert "HQ" in p["countries"]["description"]
     assert "1-10" in p["team_size"]["description"]
     assert p["limit"]["maximum"] == 100
@@ -471,7 +471,7 @@ def test_country_breakdown_on_multi_country_count(monkeypatch):
 
     monkeypatch.setattr(entry, "_call_api", fake_call_api)
     resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {
-        "role": "bdr", "headcount_max": 9, "countries": ["BE", "US", "AE"], "country_scope": "hq", "count": True}})
+        "role": "bdr", "headcount_max": 9, "countries": ["BE", "US", "AE"], "country_scope": "hq", "count": True, "by_country": True}})
     payload = json.loads(resp["result"]["content"][0]["text"])
     assert payload["pagination"]["totalCount"] == 32
     assert payload["byCountry"] == {"BE": 0, "US": 31, "AE": 1}
@@ -558,7 +558,7 @@ def test_breakdown_tolerates_probe_failures(monkeypatch):
 
     monkeypatch.setattr(entry, "_call_api", fake_call_api)
     resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {
-        "countries": "BE,US,AE", "country_scope": "hq", "count": True}})
+        "countries": "BE,US,AE", "country_scope": "hq", "count": True, "by_country": True}})
     payload = json.loads(resp["result"]["content"][0]["text"])
     assert payload["pagination"]["totalCount"] == 31
     assert payload["byCountry"] == {"BE": 0, "US": 31, "AE": None}

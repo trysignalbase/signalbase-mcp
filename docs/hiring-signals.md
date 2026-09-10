@@ -1,8 +1,10 @@
 # Hiring Signals
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_hiring_signals`
 
-Search for hiring signals (open job postings). Returns live job listings with title, location, `jobUrl`, `validThrough`, company details, applicant counts, and seniority info. Expired postings are excluded by default.
+Search for hiring signals (open job postings). Returns live job listings with title, location, `jobUrl`, `validThrough`, company details, applicant counts, and seniority info. Historical postings are included by default; use `include_expired=false` for open roles.
 
 **Endpoint:** `GET /signals/hiring`
 **Cost:** 1 credit per executed search (even with 0 rows); free with `count=true`
@@ -16,7 +18,7 @@ Search for hiring signals (open job postings). Returns live job listings with ti
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 100 (default 20) | `50` |
 | `search` | string | Free-text search across company, title, location | `"engineering"` |
-| `countries` | string | Matches the **job location OR the company HQ**. ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`); unknown → 400 | `"US,GB,DE"` |
+| `countries` | string | Matches the **job location OR the company HQ**. ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`); with `filter_version=2`: unknown → 400 | `"US,GB,DE"` |
 | `job_countries` | string | Job location only (same values) | `"US"` |
 | `company_countries` | string | Company HQ only (same values) — use this for European targets | `"EU"` |
 | `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
@@ -145,4 +147,4 @@ Search for hiring signals (open job postings). Returns live job listings with ti
 - `categories` uses pipe (`|`) separation for hiring signals
 - `team_size` refers to the entire company, not the specific team
 - US states can be filtered with the `states` parameter (e.g. "CA,NY")
-- `descriptionText` is truncated to 300 characters and logo fields are dropped unless `verbose=true`
+- `descriptionText` is truncated to 300 characters and logo fields are dropped only with `verbose=false`

@@ -6,6 +6,8 @@ argument-hint: "[company name, industry, geography, or size range]"
 
 # Companies Skill
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_companies`
 **Endpoint:** `GET /companies` | **Cost:** 1 credit per executed search (0 rows still cost); `count=true` free
 
@@ -16,7 +18,7 @@ argument-hint: "[company name, industry, geography, or size range]"
 | `page` | integer | Page number (default 1) |
 | `limit` | integer | Results per page, max 100 |
 | `search` | string | Name, industry, description, keywords |
-| `countries` | string | ISO codes, names, or regions: `US,GB`, `EU`, `DACH` (unknown → 400) |
+| `countries` | string | ISO codes, names, or regions: `US,GB`, `EU`, `DACH` (with `filter_version=2`: unknown → 400) |
 | `exclude_countries` | string | Same values, excluded |
 | `categories` | string | Pipe-separated LinkedIn industry labels |
 | `subcategories` | string | Comma-separated Signalbase categories (multi-select) |
@@ -59,4 +61,4 @@ argument-hint: "[company name, industry, geography, or size range]"
 - `growthInfo` in response can be `null` — not all companies have growth data
 - Growth percentages: `growth_1m`, `growth_3m`, `growth_6m`, `growth_9m`, `growth_12m`
 - `categories`, `keywords`, `specialties` in the response are arrays — these are response fields, not filter params
-- `description` is truncated to 300 chars and `logoUrl` dropped unless `verbose=true`
+- `description` is truncated to 300 chars and `logoUrl` dropped only with `verbose=false`

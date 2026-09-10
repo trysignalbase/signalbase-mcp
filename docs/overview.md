@@ -1,5 +1,7 @@
 # Signalbase MCP Server — Overview
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## What It Does
 
 The Signalbase MCP server is a Model Context Protocol proxy that sits between AI agents (Claude, Cursor, etc.) and the [Signalbase API](https://docs.trysignalbase.com). It exposes six tools that cover the full Signalbase data surface:
@@ -42,9 +44,9 @@ Get your API key at: [trysignalbase.com/workspace/api](https://www.trysignalbase
 
 ## Countries
 
-`countries` and `exclude_countries` (and hiring's `job_countries` / `company_countries`) accept ISO 3166-1 alpha-2 codes (`US,GB,DE`), English names (`Sweden`), or region shortcuts `EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`. Unknown values return HTTP 400 with a hint.
+`countries` and `exclude_countries` (and hiring's `job_countries` / `company_countries`) accept ISO 3166-1 alpha-2 codes (`US,GB,DE`), English names (`Sweden`), or region shortcuts `EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`. Unknown values return HTTP 400 with a hint.
 
-## Response Trimming
+## Response (example with `verbose=false`) Trimming
 
 By default the server trims API payloads to save tokens: `descriptionText`, `companyDescription`, `description`, `postContent` and `personHeadline` are cut to 300 characters (+ `…`), logo/image URL fields (`companyLogo`, `companyLogoUrl`, `logoUrl`, `logo_url`, `image`) are dropped, JSON is compact, and `_meta: {"trimmed": true, "hint": "pass verbose=true for full text"}` is added. Links (`jobUrl`, `sources`, LinkedIn URLs, `companyWebsite`) and `validThrough` are always kept. Pass `verbose=true` to any tool for the full, indented payload.
 

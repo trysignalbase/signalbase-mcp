@@ -1,5 +1,7 @@
 # Reference — All Enums & Constants
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Date Presets
 
 Relative date filters supported across all endpoints. When provided, `date_preset` takes precedence over `dateFrom`/`dateTo`.

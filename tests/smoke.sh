@@ -32,25 +32,25 @@ echo "$TOOLS" | jq -e '[.result.tools[] | .inputSchema.properties.subcategories?
 echo "$TOOLS" | jq -r '.result.tools[] | "\(.name): \(.inputSchema.properties | keys | length) params"'
 
 echo "== 2. hiring countries=NORDICS count (free)"
-call search_hiring_signals '{"countries":"NORDICS","count":true}' | jq -c '.'
+call search_hiring_signals '{"filter_version":2,"countries":"NORDICS","count":true}' | jq -c '.'
 
 echo "== 3. funding countries=EU employee_count_max=10 date_preset=last_90d count (free)"
-call search_funding_signals '{"countries":"EU","employee_count_max":10,"date_preset":"last_90d","count":true}' | jq -c '.'
+call search_funding_signals '{"filter_version":2,"countries":"EU","employee_count_max":10,"date_preset":"last_90d","count":true}' | jq -c '.'
 
 echo "== 4. funded pool → hiring by company_domain (2 paid calls)"
-FUNDED=$(call search_funding_signals '{"countries":"EU","employee_count_max":10,"date_preset":"last_90d","limit":50}')
+FUNDED=$(call search_funding_signals '{"filter_version":2,"countries":"EU","employee_count_max":10,"date_preset":"last_90d","limit":50}')
 DOMAINS=$(echo "$FUNDED" | jq -r '[.data[]?.companyWebsite // empty | sub("^https?://";"") | sub("^www\\.";"") | sub("/.*$";"")] | unique | .[:50] | join(",")')
 echo "domains ($(echo "$DOMAINS" | tr ',' '\n' | grep -c . || true)): ${DOMAINS:0:200}..."
 if [ -n "$DOMAINS" ]; then
-  call search_hiring_signals "{\"company_domain\":\"$DOMAINS\",\"departments\":\"sales\",\"limit\":100,\"sort_by\":\"date_posted\"}" \
+  call search_hiring_signals "{\"filter_version\":2,\"include_expired\":false,\"company_domain\":\"$DOMAINS\",\"departments\":\"sales\",\"limit\":100,\"sort_by\":\"date_posted\"}" \
     | jq -c '{total: .pagination.totalCount, rows: (.data | length), sample: [.data[:3][] | {companyName, title, jobUrl, validThrough}]}'
 else
   echo "no domains in funded pool — skipping hiring call"
 fi
 
 echo "== 5. verbose vs trimmed byte size (2 paid calls)"
-TRIMMED=$(call search_funding_signals '{"countries":"EU","date_preset":"last_30d","limit":20}' | wc -c)
-VERBOSE=$(call search_funding_signals '{"countries":"EU","date_preset":"last_30d","limit":20,"verbose":true}' | wc -c)
+TRIMMED=$(call search_funding_signals '{"filter_version":2,"countries":"EU","date_preset":"last_30d","limit":20,"verbose":false}' | wc -c)
+VERBOSE=$(call search_funding_signals '{"filter_version":2,"countries":"EU","date_preset":"last_30d","limit":20,"verbose":true}' | wc -c)
 echo "trimmed=${TRIMMED}B verbose=${VERBOSE}B"
 
 echo "OK"

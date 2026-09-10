@@ -1,5 +1,7 @@
 # Job Change Signals
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_job_change_signals`
 
 Search for leadership and key-hire job change signals. Returns people who recently changed roles with person name, new role, company, and LinkedIn URLs.
@@ -14,7 +16,7 @@ Search for leadership and key-hire job change signals. Returns people who recent
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 50 (default 20) | `20` |
 | `search` | string | Free-text search by company or person keywords | `"engineering leadership"` |
-| `countries` | string | Person country OR company HQ. ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`); unknown → 400 | `"DACH"` |
+| `countries` | string | Person country OR company HQ. ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`); with `filter_version=2`: unknown → 400 | `"DACH"` |
 | `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
 | `city` | string | Free-text city match | `"Berlin"` |
 | `company_name` | string | Company name match | `"Stripe"` |
@@ -133,4 +135,4 @@ founder, c_level, vp, director, head, lead, manager
 - Use `seniorities` for broader coverage, `positions` for specific roles
 - LinkedIn URLs and domains are strict canonical matches (not partial)
 - Every executed search costs 1 credit, even with 0 rows — size with `count=true` first (free)
-- `personHeadline` is truncated to 300 characters unless `verbose=true`
+- `personHeadline` is truncated to 300 characters only with `verbose=false`

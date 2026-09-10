@@ -36,26 +36,28 @@ print("  server version             :", end=" ")'
 rpc '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"check","version":"0"}}}' | python -c 'import sys,json; print(json.load(sys.stdin)["result"]["serverInfo"]["version"], "(old: 1.0.0)")'
 
 echo "== countries (free counts)"
-count "hiring countries=NORDICS"        search_hiring_signals  '{"countries":"NORDICS","count":true}'                              "0"       ">0 (= SE+NO+DK+FI+IS)"
-count "hiring countries=Sweden"         search_hiring_signals  '{"countries":"Sweden","count":true}'                               "0"       "= countries=SE"
-count "hiring countries=SE"             search_hiring_signals  '{"countries":"SE","count":true}'                                   "n"       "same n"
-count "hiring countries=Narnia"         search_hiring_signals  '{"countries":"Narnia","count":true}'                               "total=0" "API error 400 naming Narnia"
-count "funding countries=EU"            search_funding_signals '{"countries":"EU","date_preset":"last_90d","count":true}'          "0"       ">0"
-count "jobchange countries=DACH"        search_job_change_signals '{"countries":"DACH","count":true}'                              "0"       ">0"
+count "hiring countries=NORDICS"        search_hiring_signals  '{"filter_version":2,"countries":"NORDICS","count":true}'                              "0"       ">0 (= SE+NO+DK+FI+IS)"
+count "hiring countries=Sweden"         search_hiring_signals  '{"filter_version":2,"countries":"Sweden","count":true}'                               "0"       "= countries=SE"
+count "hiring countries=SE"             search_hiring_signals  '{"filter_version":2,"countries":"SE","count":true}'                                   "n"       "same n"
+count "hiring countries=Narnia"         search_hiring_signals  '{"filter_version":2,"countries":"Narnia","count":true}'                               "total=0" "API error 400 naming Narnia"
+count "funding countries=EU"            search_funding_signals '{"filter_version":2,"countries":"EU","date_preset":"last_90d","count":true}'          "0"       ">0"
+count "jobchange countries=DACH"        search_job_change_signals '{"filter_version":2,"countries":"DACH","count":true}'                              "0"       ">0"
 
 echo "== Georgi's pool (free counts)"
-count "funding EU <=10 staff last_90d"  search_funding_signals '{"countries":"EU","employee_count_max":10,"date_preset":"last_90d","count":true}' "0 (EU unknown)" "~275 on prod data"
-count "hiring EU 1-10 sales last_90d"   search_hiring_signals  '{"countries":"EU","team_size":"1-10","departments":"sales","date_preset":"last_90d","count":true}' "0" ">=0, no Syngenta/Publicis after backfill"
+count "funding EU <=10 staff last_90d"  search_funding_signals '{"filter_version":2,"countries":"EU","employee_count_max":10,"date_preset":"last_90d","count":true}' "0 (EU unknown)" "~275 on prod data"
+count "hiring EU 1-10 sales last_90d"   search_hiring_signals  '{"filter_version":2,"countries":"EU","team_size":"1-10","departments":"sales","date_preset":"last_90d","count":true}' "0" ">=0, no Syngenta/Publicis after backfill"
 
 echo "== freshness"
-count "hiring US default"               search_hiring_signals  '{"countries":"US","count":true}'                                   "N"       "N_live <= N"
-count "hiring US include_expired=true"  search_hiring_signals  '{"countries":"US","count":true,"include_expired":true}'            "400 unknown param" "N (>= default)"
+count "hiring US default"               search_hiring_signals  '{"filter_version":2,"countries":"US","count":true}'                                   "N"       "N (unchanged historical total)"
+count "hiring US include_expired=true"  search_hiring_signals  '{"filter_version":2,"countries":"US","count":true,"include_expired":true}'            "400 unknown param" "N (= default)"
 
 echo "== identifier lists"
-count "hiring company_domain list"      search_hiring_signals  '{"company_domain":"stripe.com,notion.so","departments":"sales","count":true}' "400 Invalid company_domain" "total=..."
-count "hiring company_domain as array"  search_hiring_signals  '{"company_domain":["stripe.com","notion.so"],"count":true}'          "400"     "total=... (Worker joins the list)"
+count "hiring company_domain list"      search_hiring_signals  '{"filter_version":2,"company_domain":"stripe.com,notion.so","departments":"sales","count":true}' "400 Invalid company_domain" "total=..."
+count "hiring company_domain as array"  search_hiring_signals  '{"filter_version":2,"company_domain":["stripe.com","notion.so"],"count":true}'          "400"     "total=... (Worker joins the list)"
 
 echo "== seniority"
-count "jobchange seniorities=c_level"   search_job_change_signals '{"seniorities":"c_level","count":true}'                         "~105k (Director bug)" "much smaller than seniorities=director"
-count "jobchange seniorities=director"  search_job_change_signals '{"seniorities":"director","count":true}'                        "~55k"    "unchanged"
+count "jobchange seniorities=c_level"   search_job_change_signals '{"filter_version":2,"seniorities":"c_level","count":true}'                         "~105k (Director bug)" "much smaller than seniorities=director"
+count "jobchange seniorities=director"  search_job_change_signals '{"filter_version":2,"seniorities":"director","count":true}'                        "~55k"    "unchanged"
 echo "done"
+
+count "hiring US open only opt-in" search_hiring_signals '{"countries":"US","count":true,"include_expired":false}' "400 unknown param" "N_live <= N"

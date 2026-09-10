@@ -1,5 +1,7 @@
 # Investors
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_investors`
 
 Search for investors — VCs, angels, PE firms, accelerators, and more. Returns investor profiles with AUM, investment focus, check sizes, portfolio details, and contact info.
@@ -14,7 +16,7 @@ Search for investors — VCs, angels, PE firms, accelerators, and more. Returns 
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 50 (default 20) | `20` |
 | `search` | string | Free-text search by investor name or description | `"sequoia"` |
-| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`); unknown → 400 | `"US,GB,CA"` |
+| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`); with `filter_version=2`: unknown → 400 | `"US,GB,CA"` |
 | `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
 | `categories` | string | Comma-separated investor types | `"vc,angel"` |
 | `type` | string | Single investor type (alternative to `categories`) | `"vc"` |
@@ -120,4 +122,4 @@ family_office, hedge_fund, crowdfunding
 - `activelyInvesting` indicates whether the firm is currently making new investments
 - The `categories` parameter for investors maps to **investor types** (vc, angel, pe), which is different from the `categories` parameter on signal endpoints (which maps to industry labels)
 - Every executed search costs 1 credit, even with 0 rows — size with `count=true` first (free)
-- `description` is truncated to 300 characters and logo fields are dropped unless `verbose=true`
+- `description` is truncated to 300 characters and logo fields are dropped only with `verbose=false`

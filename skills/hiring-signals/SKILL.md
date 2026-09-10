@@ -6,10 +6,12 @@ argument-hint: "[role, department, location, sector, or company]"
 
 # Hiring Signals Skill
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_hiring_signals`
 **Endpoint:** `GET /signals/hiring` | **Cost:** 1 credit per executed search (0 rows still cost); `count=true` free
 
-**Coverage:** ~84% of job locations are US. For European targets filter by company HQ (`company_countries`) or by a `company_domain` list — never by job location alone. Expired postings are excluded by default.
+**Coverage:** ~84% of job locations are US. For European targets filter by company HQ (`company_countries`) or by a `company_domain` list — never by job location alone. Historical postings are included by default; use `include_expired=false` for open roles.
 
 ## Parameters
 
@@ -18,7 +20,7 @@ argument-hint: "[role, department, location, sector, or company]"
 | `page` | integer | Page number (default 1) |
 | `limit` | integer | Results per page, max 100 |
 | `search` | string | Free-text search |
-| `countries` | string | Job location **or** company HQ. ISO codes, names, or regions `EU`, `NORDICS`, `DACH`, … (unknown → 400) |
+| `countries` | string | Job location **or** company HQ. ISO codes, names, or regions `EU`, `NORDICS`, `DACH`, … (with `filter_version=2`: unknown → 400) |
 | `job_countries` | string | Job location only |
 | `company_countries` | string | Company HQ only — use for European targets |
 | `exclude_countries` | string | Same values, excluded |
@@ -34,7 +36,7 @@ argument-hint: "[role, department, location, sector, or company]"
 | `seniorities` | string | Comma-separated seniority levels |
 | `team_size` | string | Company size ranges: `1-10`, `11-50`, `51-200`, `201-1000`, `1000-plus` |
 | `applicants` | string | Ranges: `0-25,26-50,51-100,101-200,201-plus` |
-| `include_expired` | boolean | Default false (expired hidden); true to include |
+| `include_expired` | boolean | Omitted/true: include history; false: open roles only |
 | `dateFrom` / `dateTo` | string | YYYY-MM-DD |
 | `date_preset` | string | Relative date shorthand |
 | `sort_by` | string | `date_posted`, `created_at`, `title`, `company_name`, `location` |
@@ -72,9 +74,9 @@ argument-hint: "[role, department, location, sector, or company]"
 ## Gotchas
 
 - Every executed search costs 1 credit even with 0 rows — always `count=true` first
-- Each row carries `jobUrl` and `validThrough`; expired postings are hidden unless `include_expired=true`
+- Each row carries `jobUrl` and `validThrough`; expired postings are hidden only with `include_expired=false`
 - `categories` uses **pipe** `|` separator, not comma
 - `numApplicants` in response is a string, not integer
 - `team_size` = company size, not the specific team
 - US states use 2-letter codes: CA, NY, TX
-- `descriptionText` is truncated to 300 chars and logos dropped unless `verbose=true`
+- `descriptionText` is truncated to 300 chars and logos dropped only with `verbose=false`

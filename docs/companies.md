@@ -1,5 +1,7 @@
 # Companies
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_companies`
 
 Search and browse the Signalbase company database independently of signals. Returns company profiles with headcount, industry, growth metrics, and more.
@@ -14,7 +16,7 @@ Search and browse the Signalbase company database independently of signals. Retu
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 100 (default 20) | `50` |
 | `search` | string | Free-text search across name, industry, description, keywords, specialties | `"AI"` |
-| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`); unknown → 400 | `"US,GB,DE"` |
+| `countries` | string | Comma-separated ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`); with `filter_version=2`: unknown → 400 | `"US,GB,DE"` |
 | `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
 | `categories` | string | Pipe-separated LinkedIn industry labels | `"Software Development\|Financial Services"` |
 | `subcategories` | string | Comma-separated Signalbase categories (multi-select) | `"ai,saas"` |
@@ -98,7 +100,7 @@ Search and browse the Signalbase company database independently of signals. Retu
 }
 ```
 
-`logoUrl` is present in the API payload but dropped by the Worker unless `verbose=true`.
+`logoUrl` is present in the API payload but dropped by the Worker only with `verbose=false`.
 
 ## Common Workflows
 
@@ -129,4 +131,4 @@ Search and browse the Signalbase company database independently of signals. Retu
 - `industry` uses exact match on the LinkedIn industry label (not fuzzy)
 - The `industry` parameter on the companies endpoint is different from `categories` on signal endpoints — here it maps directly to the company's industry field
 - `categories`, `keywords`, and `specialties` in the response are arrays (not the filter parameter)
-- `description` is truncated to 300 characters unless `verbose=true`
+- `description` is truncated to 300 characters only with `verbose=false`

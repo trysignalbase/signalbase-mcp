@@ -2,20 +2,39 @@
 
 A Model Context Protocol (MCP) server that proxies the [Signalbase API](https://docs.trysignalbase.com), deployed on Cloudflare Workers. Gives AI agents (Claude, Cursor, etc.) access to real-time funding signals, acquisition signals, job change signals, hiring data, investor profiles, and company search.
 
-## 1.1.0 — changes for existing users
+## Endpoints
 
-Defaults that differ from 1.0.0. Each has an opt-out.
+The same deployment serves two experiences, using the same API key:
 
-| Change | Why | Opt-out |
+| | Existing MCP | HR MCP v2 |
 |---|---|---|
-| Responses are trimmed: text fields cut at 300 chars, logo/image URLs dropped, `sources` capped at 3 (+`sourcesTotal`), internal ids dropped, HTML entities decoded | a default funding call was ~17k tokens | `verbose=true` returns the raw API payload |
-| Hiring hides postings whose `valid_through` has passed, and posts without one older than 60 days | "open roles" should be open | `include_expired=true`, or any historical `dateTo` / preset |
-| Unknown country values return an error instead of an empty result | silent zero rows hid typos | send ISO codes, names or the listed regions |
-| The North America region is `NORTH_AMERICA`; `NA` is Namibia (ISO) | avoid the ISO collision | — |
-| Tool schemas list many more parameters and four intent arguments (`role`, `headcount_min/max`, `country_scope`); `count=true` is free on all six tools | the funded-pool → hiring workflow needs them | none needed; old calls are unchanged |
+| Worker URL | `https://mcp.trysignalbase.com` | `https://mcp.trysignalbase.com/v2` |
+| Keyed URL for Cowork | `/api/mcp/c/<key>` | `/api/mcp/v2/c/<key>` |
+| Tool names and arguments | All original names/arguments retained | Four HR workflows plus the six original tools and recruiting prompts |
+| Responses | Full original payload and `data` rows | Compact payload and `data` rows, plus grouped hiring companies |
+| Improved matching | Automatic; unknown country literals remain accepted | Automatic; unknown countries return an actionable tool error |
+| Hiring freshness | History included as before | Open postings by default; historical end dates/calendar presets retain history |
+| Country count breakdown | Off unless requested | On for multi-country counts, up to six bounded probes |
 
-Type-stable: JSON-encoded list fields stay strings; `data` rows are always returned (the grouped
-`companies[]` view on hiring is opt-in via `group_by_company=true`).
+Existing users need no configuration changes to receive improved country, role and
+seniority matching. Tool names, argument aliases (including `personLinkedinUrl`),
+response types, pagination, authentication and the existing connection URLs remain
+stable. Better matching can change which results are returned.
+
+Connect HR users to `/v2` for the new experience; no per-call version flags are needed.
+Deploy the app and Worker changes before using the new keyed v2 route. Nothing in the
+classic setup automatically redirects existing integrations to v2.
+
+Optional controls on both endpoints:
+
+- `verbose=true`: full text, fields, IDs and sources; `false`: compact response.
+- `group_by_company=true`: add company groups without removing `data` rows.
+- `include_expired=true`: include history; `false`: open hiring postings only.
+- `by_country=false`: skip country count probes; `true`: enable them.
+- `filter_version=1`: freeze original filter matching for exact legacy queries;
+  `2`: strict enhanced matching. Classic defaults to enhanced, tolerant matching.
+
+See [HR MCP v2 setup and behavior](docs/hr-v2.md).
 
 ## Tools
 
@@ -28,13 +47,13 @@ Type-stable: JSON-encoded list fields stay strings; `data` rows are always retur
 | `search_investors` | Search VCs, angels, PE firms with portfolio data | 1 credit per search; `count=true` free |
 | `search_companies` | Browse company profiles with headcount and growth | 1 credit per search; `count=true` free |
 
-Every tool also accepts `verbose` (Worker-only, never forwarded to the API). By default responses are trimmed: long text fields are cut to 300 characters, logo/image URLs are dropped, and `_meta.trimmed=true` is added. Links (`jobUrl`, `sources`, LinkedIn URLs, `companyWebsite`) and `validThrough` are always kept. Pass `verbose=true` for the full payload.
+Every tool also accepts `verbose` (Worker-only, never forwarded to the API). With `verbose=false`, responses are trimmed: long text fields are cut to 300 characters, logo/image URLs are dropped, and `_meta.trimmed=true` is added. Links (`jobUrl`, `sources`, LinkedIn URLs, `companyWebsite`) and `validThrough` are always kept. Pass `verbose=true` for the full payload.
 
 ### Filters common to every tool
 
 | Parameter | Notes |
 |-----------|-------|
-| `countries` / `exclude_countries` | ISO-2 codes (`US,GB`), English names (`Sweden`), or region shortcuts `EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`. Unknown values return HTTP 400. |
+| `countries` / `exclude_countries` | ISO-2 codes (`US,GB`), English names (`Sweden`), or region shortcuts `EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`. With `filter_version=2`, unknown values return HTTP 400; the classic endpoint continues accepting legacy literals. |
 | `company_domain` / `company_linkedin_url` | Comma-separated lists, up to 50 per call, strict canonical match — one credit for the whole list (funding, acquisitions, job changes, hiring). |
 | `count` | `true` returns only the total count. Free on all six tools. |
 | `page`, `limit`, `search`, `dateFrom`, `dateTo`, `date_preset` | Pagination, free text and dates (`date_preset` overrides the absolute dates). |
@@ -123,7 +142,7 @@ curl -X POST https://mcp.trysignalbase.com \
 1. Size it for free: `search_funding_signals` with `countries=EU`, `employee_count_max=10`, `date_preset=last_90d`, `count=true`
 2. Pull the pool: same filters with `limit=50`
 3. Collect each row's `companyWebsite` domain
-4. One credit per 50 domains: `search_hiring_signals` with `company_domain=<up to 50 domains>`, `departments=sales`, `limit=100`, `sort_by=date_posted` — rows carry `jobUrl` and `validThrough`; expired postings are excluded by default
+4. One credit per 50 domains: `search_hiring_signals` with `company_domain=<up to 50 domains>`, `departments=sales`, `limit=100`, `sort_by=date_posted` — rows carry `jobUrl` and `validThrough`; open roles require `include_expired=false`
 5. Independent lane: `search_hiring_signals` with `company_countries=EU`, `team_size=1-10`, `departments=sales`
 
 The `funded-and-hiring` prompt (`prompts/get`) scripts this with arguments `geography`, `max_employees`, `department`, `window`.
@@ -148,11 +167,11 @@ The `funded-and-hiring` prompt (`prompts/get`) scripts this with arguments `geog
 - Every **executed search costs 1 credit**, including searches that return 0 rows and every extra page.
 - `count=true` is **free on all six tools** — use it to size a query before spending a credit.
 - A `company_domain` / `company_linkedin_url` list of up to 50 entries is a single search (1 credit); never loop one call per company.
-- Unknown parameters or unknown country values return HTTP 400 and cost nothing.
+- Unknown parameter names return HTTP 400. Unknown country values return 400 only with `filter_version=2`.
 
 ## Hiring coverage
 
-The hiring index is ~84% US job locations. For European (or any non-US) targets, do not filter by job location alone — use `company_countries=<region>` (+ `team_size`) or the funded-pool workflow above (`company_domain` list). Expired postings are excluded by default; pass `include_expired=true` for historical analysis.
+The hiring index is ~84% US job locations. For European (or any non-US) targets, do not filter by job location alone — use `company_countries=<region>` (+ `team_size`) or the funded-pool workflow above (`company_domain` list). Historical postings are included by default; use `include_expired=false` for open roles.
 
 ## Rate Limits
 
