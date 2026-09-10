@@ -87,7 +87,7 @@ INVESTOR_TYPES = [
 ]
 
 COUNTRY_REGIONS = [
-    "EU", "EUROPE", "DACH", "BENELUX", "NORDICS", "CEE", "WE", "NA", "LATAM",
+    "EU", "EUROPE", "DACH", "BENELUX", "NORDICS", "CEE", "WE", "NORTH_AMERICA", "LATAM",
 ]
 
 TEAM_SIZE_RANGES = ["1-10", "11-50", "51-200", "201-1000", "1000-plus"]
@@ -767,7 +767,7 @@ hiring (open roles), investors, and companies.
 ## Countries
 - `countries` / `exclude_countries` accept ISO 3166-1 alpha-2 codes (`US,GB,DE`),
   English names (`Sweden`), or region shortcuts `EU`, `EUROPE`, `DACH`, `BENELUX`,
-  `NORDICS`, `CEE`, `WE`, `NA`, `LATAM`. Values are comma-separated; unknown values
+  `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM` (`NA` is Namibia). Values are comma-separated; unknown values
   return HTTP 400 with a hint — fix the value, do not retry blindly.
 - Hiring: `countries` matches the JOB LOCATION **or** the COMPANY HQ. Use
   `job_countries` (location only) or `company_countries` (HQ only) to pin one side.
@@ -1227,16 +1227,14 @@ def _resolve_role(role: str) -> dict:
         else:
             positions.append(part)
     out = {}
-    if departments and positions:
-        # The API ANDs `positions` with `departments`. "bdr or engineers" is an
-        # OR, so keep everything on the title axis (positions are OR'd there);
-        # a department word becomes a title substring match.
-        out["positions"] = ",".join(dict.fromkeys(positions + [d.replace("_", " ") for d in departments]))
-        return out
     if departments:
         out["departments"] = ",".join(dict.fromkeys(departments))
     if positions:
         out["positions"] = ",".join(dict.fromkeys(positions))
+    if departments and positions:
+        # "bdr or engineers": title match OR department match. The API ANDs the
+        # two by default; role_logic=or keeps full department semantics.
+        out["role_logic"] = "or"
     return out
 
 

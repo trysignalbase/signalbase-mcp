@@ -2,6 +2,21 @@
 
 A Model Context Protocol (MCP) server that proxies the [Signalbase API](https://docs.trysignalbase.com), deployed on Cloudflare Workers. Gives AI agents (Claude, Cursor, etc.) access to real-time funding signals, acquisition signals, job change signals, hiring data, investor profiles, and company search.
 
+## 1.1.0 — changes for existing users
+
+Defaults that differ from 1.0.0. Each has an opt-out.
+
+| Change | Why | Opt-out |
+|---|---|---|
+| Responses are trimmed: text fields cut at 300 chars, logo/image URLs dropped, `sources` capped at 3 (+`sourcesTotal`), internal ids dropped, HTML entities decoded | a default funding call was ~17k tokens | `verbose=true` returns the raw API payload |
+| Hiring hides postings whose `valid_through` has passed, and posts without one older than 60 days | "open roles" should be open | `include_expired=true`, or any historical `dateTo` / preset |
+| Unknown country values return an error instead of an empty result | silent zero rows hid typos | send ISO codes, names or the listed regions |
+| The North America region is `NORTH_AMERICA`; `NA` is Namibia (ISO) | avoid the ISO collision | — |
+| Tool schemas list many more parameters and four intent arguments (`role`, `headcount_min/max`, `country_scope`); `count=true` is free on all six tools | the funded-pool → hiring workflow needs them | none needed; old calls are unchanged |
+
+Type-stable: JSON-encoded list fields stay strings; `data` rows are always returned (the grouped
+`companies[]` view on hiring is opt-in via `group_by_company=true`).
+
 ## Tools
 
 | Tool | Description | Cost |

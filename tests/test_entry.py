@@ -533,8 +533,16 @@ def test_hiring_rows_grouped_by_company():
 
 def test_mixed_role_alternatives_stay_or():
     out = entry._resolve_role("bdr or engineers")
-    assert "departments" not in out
-    assert out["positions"] == "bdr,engineering"
+    assert out == {"departments": "engineering", "positions": "bdr", "role_logic": "or"}
+    assert "role_logic" not in entry._resolve_role("bdr")
+    assert "role_logic" not in entry._resolve_role("engineers")
+
+
+def test_no_region_named_na_is_advertised():
+    blob = json.dumps(entry.TOOLS) + entry.INSTRUCTIONS
+    assert "NORTH_AMERICA" in blob
+    import re as _re
+    assert not _re.search(r"[^A-Z_]NA[^A-Z_]", blob.replace("NAMIBIA", "").replace("Namibia", "")) or "(`NA` is Namibia)" in blob
 
 
 def test_breakdown_tolerates_probe_failures(monkeypatch):
