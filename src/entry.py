@@ -804,6 +804,15 @@ marketing…) match by department so free-text hiring posts are found; exact tit
 - `date_preset` overrides `dateFrom`/`dateTo`; absolute dates are YYYY-MM-DD
 - Amounts are whole USD integers (5000000 = $5M)
 
+## Presenting hiring results
+Trimmed hiring responses carry `companies[]`: one entry per company with `openRoles`
+and `postings[]` (same title in several cities = one posting with several locations).
+Answer "which companies are hiring X" from `companies`, not from raw `data` rows, and
+quote `companiesTotal` rather than the row count. `role="bdr"` (or sdr / account
+executive) means the rep-level sales family — reps, associates, specialists,
+executives — and deliberately excludes Director/Manager/Head/VP titles; say so if the
+user asks why a Director of Business Development is missing.
+
 ## Response size
 - By default responses are trimmed: long text fields are cut to 300 chars, logo/image
   URLs are dropped, `sources` is capped to 3 entries (with `sourcesTotal`), JSON-encoded
@@ -1121,11 +1130,26 @@ def _is_truthy(v) -> bool:
 # ── Intent resolution ────────────────────────────────────────────────────────
 # Role families → API `departments`. Anything else becomes a `positions` title
 # match. Deterministic, no model involved.
+
+def _reorder_intent_first(tools):
+    """Put role / headcount / countries / country_scope / count at the top of
+    each tool's properties so an agent reading the schema meets the intent
+    arguments before the raw API knobs."""
+    first = ["role", "headcount_max", "headcount_min", "countries", "country_scope", "count"]
+    for t in tools:
+        props = t["inputSchema"]["properties"]
+        ordered = {k: props[k] for k in first if k in props}
+        ordered.update({k: v for k, v in props.items() if k not in ordered})
+        t["inputSchema"]["properties"] = ordered
+    return tools
+
+
+_reorder_intent_first(TOOLS)
+
 ROLE_FAMILIES = {
     "sales": [
-        "sales", "bdr", "sdr", "business development", "biz dev", "bizdev",
-        "account executive", "ae", "revenue", "account manager", "sales rep",
-        "sales representative", "sales development", "gtm", "go-to-market",
+        "sales", "business development", "biz dev", "bizdev", "revenue",
+        "account manager", "gtm", "go-to-market", "commercial",
     ],
     "engineering": [
         "engineer", "engineers", "engineering", "developer", "developers",
@@ -1146,6 +1170,11 @@ ROLE_FAMILIES = {
 
 # Titles that are precise enough to stay title matches (ordered: longest first).
 ROLE_TITLES = [
+    # rep-level sales-development family: the API expands these four keys to
+    # BDR/SDR/business development rep|associate|executive|specialist, inside
+    # sales, account executive — and excludes director/manager/head/VP titles.
+    "bdr", "sdr", "business development representative", "sales development representative",
+    "account executive", "ae",
     "founding account executive", "head of business development", "head of sales",
     "vp of sales", "vp sales", "head of growth", "head of marketing", "head of product",
     "head of engineering", "engineering manager", "product manager", "sales manager",
@@ -1162,7 +1191,7 @@ def _resolve_role(role: str) -> dict:
     departments, positions = [], []
     for part in parts:
         if part in ROLE_TITLES:
-            positions.append(part)
+            positions.append("bdr" if part in ("ae", "account executive", "sdr", "sales development representative", "business development representative") else part)
             continue
         matched = None
         for dept, words in ROLE_FAMILIES.items():
@@ -1357,6 +1386,46 @@ def _trim_value(value, changed: list | None = None):
     return value
 
 
+
+def _group_hiring_by_company(rows):
+    """Collapse posting rows into one entry per company. Postings with the same
+    title at the same company are merged and their locations listed, so a
+    company advertising one role in three cities is one hire, not three."""
+    companies = {}
+    for r in rows:
+        key = (r.get("companyLinkedin") or r.get("companyWebsite") or r.get("companyName") or "").lower()
+        if not key:
+            continue
+        c = companies.setdefault(key, {
+            "company": r.get("companyName"),
+            "hq": r.get("companyCountry"),
+            "headcount": r.get("companyEmployeeCount"),
+            "website": r.get("companyWebsite"),
+            "linkedin": r.get("companyLinkedin"),
+            "postings": [],
+        })
+        title = (r.get("title") or "").strip()
+        loc = r.get("location") or r.get("city") or r.get("jobCountry")
+        existing = next((p for p in c["postings"] if p["title"].lower() == title.lower()), None)
+        if existing:
+            if loc and loc not in existing["locations"]:
+                existing["locations"].append(loc)
+            if r.get("jobUrl") and r["jobUrl"] not in existing["links"]:
+                existing["links"].append(r["jobUrl"])
+            continue
+        c["postings"].append({
+            "title": title,
+            "locations": [loc] if loc else [],
+            "posted": (r.get("datePosted") or "")[:10] or None,
+            "validThrough": (r.get("validThrough") or "")[:10] or None,
+            "links": [r["jobUrl"]] if r.get("jobUrl") else [],
+        })
+    out = list(companies.values())
+    for c in out:
+        c["openRoles"] = len(c["postings"])
+    return out
+
+
 def _trim_response(data):
     """Default (non-verbose) response shaping: shorter text, no logos.
     Links (jobUrl, sources, LinkedIn URLs, companyWebsite) and validThrough are kept.
@@ -1364,8 +1433,15 @@ def _trim_response(data):
     count=true responses and empty results stay clean."""
     changed = [False]
     trimmed = _trim_value(data, changed)
-    if isinstance(trimmed, dict) and changed[0]:
-        trimmed["_meta"] = dict(TRIM_META)
+    if isinstance(trimmed, dict):
+        rows = trimmed.get("data")
+        endpoint = (trimmed.get("meta") or {}).get("endpoint")
+        if endpoint == "signals.hiring" and isinstance(rows, list) and rows:
+            trimmed["companies"] = _group_hiring_by_company(rows)
+            trimmed["companiesTotal"] = len(trimmed["companies"])
+            changed[0] = True
+        if changed[0]:
+            trimmed["_meta"] = dict(TRIM_META)
     return trimmed
 
 

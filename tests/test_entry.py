@@ -427,14 +427,15 @@ def test_trim_drops_internal_ids_in_nested_lists():
 
 
 def test_resolve_role_families_and_titles():
-    assert entry._resolve_role("bdr") == {"departments": "sales"}
+    assert entry._resolve_role("bdr") == {"positions": "bdr"}
+    assert entry._resolve_role("SDR") == {"positions": "bdr"}
+    assert entry._resolve_role("account executive") == {"positions": "bdr"}
     assert entry._resolve_role("Sales or business development") == {"departments": "sales"}
     assert entry._resolve_role("engineers") == {"departments": "engineering"}
-    assert entry._resolve_role("account executive") == {"departments": "sales"}
     assert entry._resolve_role("head of sales") == {"positions": "head of sales"}
     assert entry._resolve_role("cto") == {"positions": "cto"}
     assert entry._resolve_role("underwater basket weaver") == {"positions": "underwater basket weaver"}
-    assert entry._resolve_role("bdr, cto") == {"departments": "sales", "positions": "cto"}
+    assert entry._resolve_role("bdr, cto") == {"positions": "bdr,cto"}
     assert entry._resolve_role("") == {}
 
 
@@ -442,11 +443,13 @@ def test_resolve_intent_args_hiring():
     out = entry._resolve_intent_args("search_hiring_signals", {
         "role": "bdr", "headcount_max": 9, "countries": "BE,NL", "country_scope": "hq", "count": True,
     })
-    assert out == {"departments": "sales", "team_size": "1-9", "company_countries": "BE,NL", "count": True}
+    assert out == {"positions": "bdr", "team_size": "1-9", "company_countries": "BE,NL", "count": True}
     out = entry._resolve_intent_args("search_hiring_signals", {"headcount_min": 50, "countries": "US", "country_scope": "job"})
     assert out["team_size"].startswith("50-") and out["job_countries"] == "US" and "countries" not in out
     # explicit API params win over intent args
     out = entry._resolve_intent_args("search_hiring_signals", {"role": "bdr", "departments": "marketing"})
+    assert out["departments"] == "marketing" and out["positions"] == "bdr"
+    out = entry._resolve_intent_args("search_hiring_signals", {"role": "sales", "departments": "marketing"})
     assert out["departments"] == "marketing,sales"
 
 
@@ -472,7 +475,7 @@ def test_country_breakdown_on_multi_country_count(monkeypatch):
     assert payload["pagination"]["totalCount"] == 32
     assert payload["byCountry"] == {"BE": 0, "US": 31, "AE": 1}
     assert "BE" in payload["hint"]
-    assert calls[0]["company_countries"] == "BE,US,AE" and calls[0]["departments"] == "sales"
+    assert calls[0]["company_countries"] == "BE,US,AE" and calls[0]["positions"] == "bdr"
     assert len(calls) == 4  # one combined + three per-country, all free
 
 
@@ -494,3 +497,31 @@ def test_trim_unescapes_html_entities():
     assert out["data"][0]["title"] == "Sales & Marketing Lead"
     assert out["data"][0]["companyName"] == "R&D Co"
     assert out["_meta"]["trimmed"] is True
+
+
+def test_hiring_schema_leads_with_intent_args():
+    props = list(next(t for t in entry.TOOLS if t["name"] == "search_hiring_signals")["inputSchema"]["properties"])
+    assert props[:5] == ["role", "headcount_max", "headcount_min", "countries", "country_scope"]
+
+
+def test_hiring_rows_grouped_by_company():
+    rows = [
+        {"companyName": "Trove", "companyCountry": "US", "companyEmployeeCount": 7, "companyWebsite": "trove.com",
+         "title": "Sales Development Representative", "location": "Encinitas, CA", "datePosted": "2026-06-03T00:00:00Z", "jobUrl": "https://l/1"},
+        {"companyName": "Trove", "companyCountry": "US", "companyEmployeeCount": 7, "companyWebsite": "trove.com",
+         "title": "Sales Development Representative", "location": "Sausalito, CA", "datePosted": "2026-06-01T00:00:00Z", "jobUrl": "https://l/2"},
+        {"companyName": "Ploy", "companyCountry": "US", "companyEmployeeCount": 6, "companyWebsite": "ploy.io",
+         "title": "BDR", "location": "NYC", "datePosted": "2026-06-17T00:00:00Z", "jobUrl": "https://l/3"},
+        {"companyName": "Ploy", "companyCountry": "US", "companyEmployeeCount": 6, "companyWebsite": "ploy.io",
+         "title": "SDR", "location": "NYC", "datePosted": "2026-06-17T00:00:00Z", "jobUrl": "https://l/4"},
+    ]
+    out = entry._trim_response({"success": True, "data": rows, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}})
+    assert out["companiesTotal"] == 2
+    trove = next(c for c in out["companies"] if c["company"] == "Trove")
+    assert trove["openRoles"] == 1 and trove["postings"][0]["locations"] == ["Encinitas, CA", "Sausalito, CA"]
+    assert len(trove["postings"][0]["links"]) == 2
+    ploy = next(c for c in out["companies"] if c["company"] == "Ploy")
+    assert ploy["openRoles"] == 2
+    # count-only and non-hiring responses are untouched
+    assert "companies" not in entry._trim_response({"data": [], "meta": {"endpoint": "signals.hiring"}})
+    assert "companies" not in entry._trim_response({"data": rows, "meta": {"endpoint": "signals.funding"}})
