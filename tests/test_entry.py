@@ -77,9 +77,9 @@ def test_tools_call_strips_verbose_before_call_api(monkeypatch):
     captured = {}
 
     async def fake_call_api(endpoint, params, api_key):
-        captured["endpoint"] = endpoint
-        captured["params"] = params
-        captured["api_key"] = api_key
+        captured.setdefault("endpoint", endpoint)
+        captured.setdefault("params", params)
+        captured.setdefault("api_key", api_key)
         return {"success": True, "data": [{"companyName": "X", "companyLogo": "http://logo"}]}
 
     monkeypatch.setattr(entry, "_call_api", fake_call_api)
@@ -424,3 +424,66 @@ def test_trim_drops_internal_ids_in_nested_lists():
     assert out["data"][0]["investors"] == [{"name": "Hi Inov", "type": "VC"}]
     assert out["data"][0]["sources"] == [{"url": "https://x", "title": None}]
     assert out["_meta"]["trimmed"] is True
+
+
+def test_resolve_role_families_and_titles():
+    assert entry._resolve_role("bdr") == {"departments": "sales"}
+    assert entry._resolve_role("Sales or business development") == {"departments": "sales"}
+    assert entry._resolve_role("engineers") == {"departments": "engineering"}
+    assert entry._resolve_role("account executive") == {"departments": "sales"}
+    assert entry._resolve_role("head of sales") == {"positions": "head of sales"}
+    assert entry._resolve_role("cto") == {"positions": "cto"}
+    assert entry._resolve_role("underwater basket weaver") == {"positions": "underwater basket weaver"}
+    assert entry._resolve_role("bdr, cto") == {"departments": "sales", "positions": "cto"}
+    assert entry._resolve_role("") == {}
+
+
+def test_resolve_intent_args_hiring():
+    out = entry._resolve_intent_args("search_hiring_signals", {
+        "role": "bdr", "headcount_max": 9, "countries": "BE,NL", "country_scope": "hq", "count": True,
+    })
+    assert out == {"departments": "sales", "team_size": "1-9", "company_countries": "BE,NL", "count": True}
+    out = entry._resolve_intent_args("search_hiring_signals", {"headcount_min": 50, "countries": "US", "country_scope": "job"})
+    assert out["team_size"].startswith("50-") and out["job_countries"] == "US" and "countries" not in out
+    # explicit API params win over intent args
+    out = entry._resolve_intent_args("search_hiring_signals", {"role": "bdr", "departments": "marketing"})
+    assert out["departments"] == "marketing,sales"
+
+
+def test_resolve_intent_args_funding_and_passthrough():
+    out = entry._resolve_intent_args("search_funding_signals", {"headcount_max": 10, "countries": "EU"})
+    assert out == {"employee_count_max": 10, "countries": "EU"}
+    out = entry._resolve_intent_args("search_investors", {"countries": "GB"})
+    assert out == {"countries": "GB"}
+
+
+def test_country_breakdown_on_multi_country_count(monkeypatch):
+    calls = []
+
+    async def fake_call_api(endpoint, params, api_key):
+        calls.append(dict(params))
+        n = {"BE": 0, "US": 31, "AE": 1, "BE,US,AE": 32}.get(params.get("company_countries", ""), 5)
+        return {"success": True, "data": [], "pagination": {"totalCount": n}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {
+        "role": "bdr", "headcount_max": 9, "countries": ["BE", "US", "AE"], "country_scope": "hq", "count": True}})
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["pagination"]["totalCount"] == 32
+    assert payload["byCountry"] == {"BE": 0, "US": 31, "AE": 1}
+    assert "BE" in payload["hint"]
+    assert calls[0]["company_countries"] == "BE,US,AE" and calls[0]["departments"] == "sales"
+    assert len(calls) == 4  # one combined + three per-country, all free
+
+
+def test_no_breakdown_for_paid_or_single_country(monkeypatch):
+    calls = []
+
+    async def fake_call_api(endpoint, params, api_key):
+        calls.append(dict(params))
+        return {"success": True, "data": [], "pagination": {"totalCount": 1}, "meta": {"creditsUsed": 1}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "BE,US", "limit": 5}})
+    _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "BE", "count": True}})
+    assert len(calls) == 2

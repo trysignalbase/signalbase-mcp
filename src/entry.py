@@ -6,6 +6,7 @@ hiring signals, investor data, and company search via MCP tools.
 """
 
 import json
+import re
 from pyodide.ffi import to_js
 from js import Response, Headers, Object, fetch, JSON
 
@@ -266,6 +267,41 @@ SENIORITIES_PROP = {
     ),
 }
 
+# ── Intent-level arguments (resolved by the Worker, never sent to the API) ──
+ROLE_PROP = {
+    "type": "string",
+    "description": (
+        "What the company is hiring for, in plain words: 'bdr', 'sales', "
+        "'account executive', 'engineers', 'marketing', 'product manager', 'cto'. "
+        "The Worker maps role families (sales/BD/SDR/AE, engineering, marketing, "
+        "product, design, finance, people, data, support, legal) to `departments` "
+        "so free-text hiring posts match, and exact titles to `positions`. "
+        "Prefer this over positions/departments unless you need precise control."
+    ),
+}
+HEADCOUNT_MIN_PROP = {
+    "type": "integer",
+    "minimum": 0,
+    "description": "Minimum company headcount (whole company).",
+}
+HEADCOUNT_MAX_PROP = {
+    "type": "integer",
+    "minimum": 1,
+    "description": (
+        "Maximum company headcount (whole company). 'under 10 people' = 9. "
+        "Mapped to team_size / employee_count filters by the Worker."
+    ),
+}
+COUNTRY_SCOPE_PROP = {
+    "type": "string",
+    "enum": ["hq", "job", "either"],
+    "description": (
+        "How `countries` is applied on hiring: 'hq' = company headquarters "
+        "(use for 'companies in Belgium'), 'job' = where the job is located, "
+        "'either' (default) = HQ or job location."
+    ),
+}
+
 SORT_ORDER_PROP = {
     "type": "string",
     "description": "Sort direction",
@@ -298,6 +334,8 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "headcount_min": HEADCOUNT_MIN_PROP,
+                "headcount_max": HEADCOUNT_MAX_PROP,
                 "page": PAGE_PROP,
                 "limit": _limit_prop(50),
                 "search": {
@@ -352,6 +390,8 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "headcount_min": HEADCOUNT_MIN_PROP,
+                "headcount_max": HEADCOUNT_MAX_PROP,
                 "page": PAGE_PROP,
                 "limit": _limit_prop(50),
                 "search": {
@@ -400,6 +440,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "role": ROLE_PROP,
                 "page": PAGE_PROP,
                 "limit": _limit_prop(50),
                 "search": {
@@ -472,6 +513,10 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "role": ROLE_PROP,
+                "headcount_min": HEADCOUNT_MIN_PROP,
+                "headcount_max": HEADCOUNT_MAX_PROP,
+                "country_scope": COUNTRY_SCOPE_PROP,
                 "page": PAGE_PROP,
                 "limit": _limit_prop(100),
                 "search": {
@@ -633,6 +678,8 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "headcount_min": HEADCOUNT_MIN_PROP,
+                "headcount_max": HEADCOUNT_MAX_PROP,
                 "page": PAGE_PROP,
                 "limit": _limit_prop(100),
                 "search": {
@@ -716,12 +763,13 @@ hiring (open roles), investors, and companies.
 ## Key Workflows
 
 ### 0. "Companies under N people hiring a <role> in <countries>"
-`search_hiring_signals` with `team_size=1-<N-1>`, `company_countries=<codes or regions>`
-(HQ; use `job_countries` only if the job location itself matters), `departments=sales`
-(or the relevant department) and `count=true` first, then the list with `limit=100`,
-`sort_by=date_posted`. Prefer `departments` over `positions` for role families: small
-companies post "Software Sales Specialist" or "Founding AE", not "BDR". Run one count
-per country when the user lists several, so the answer says which countries are empty.
+`search_hiring_signals` with `role="<role as the user said it>"`, `headcount_max=N-1`,
+`countries="<codes or regions>"`, `country_scope="hq"` (the user means where the company
+is), `count=true` first (free; a multi-country count returns `byCountry` so you can say
+which countries are empty), then the same without count, `limit=100`, `sort_by=date_posted`.
+The Worker turns `role` into the right filter: role families (sales, BDR, engineers,
+marketing…) match by department so free-text hiring posts are found; exact titles
+(CTO, head of sales) match by title. Use `positions`/`departments` only for precise control.
 
 ### 1. Funded pool → who is hiring (recommended for "raised recently AND hiring X")
 1. `search_funding_signals` with `countries`, `employee_count_max`, `date_preset`
@@ -1068,11 +1116,157 @@ def _is_truthy(v) -> bool:
     return bool(v)
 
 
-def _prepare_tool_args(tool_args) -> tuple:
+
+# ── Intent resolution ────────────────────────────────────────────────────────
+# Role families → API `departments`. Anything else becomes a `positions` title
+# match. Deterministic, no model involved.
+ROLE_FAMILIES = {
+    "sales": [
+        "sales", "bdr", "sdr", "business development", "biz dev", "bizdev",
+        "account executive", "ae", "revenue", "account manager", "sales rep",
+        "sales representative", "sales development", "gtm", "go-to-market",
+    ],
+    "engineering": [
+        "engineer", "engineers", "engineering", "developer", "developers",
+        "software", "backend", "frontend", "full stack", "fullstack", "devops",
+        "sre", "swe",
+    ],
+    "marketing": ["marketing", "marketer", "demand gen", "demand generation", "brand", "content"],
+    "product": ["product manager", "product management", "pm", "product owner", "product"],
+    "design": ["design", "designer", "ux", "ui"],
+    "finance": ["finance", "financial", "accounting", "accountant", "controller", "cfo office"],
+    "people": ["hr", "people", "talent", "recruiter", "recruiting", "human resources"],
+    "data": ["data", "analytics", "analyst", "data scientist", "machine learning", "ml"],
+    "customer_success": ["customer success", "support", "customer support", "csm"],
+    "legal": ["legal", "compliance", "counsel"],
+    "operations": ["operations", "ops", "operations manager"],
+    "growth": ["growth"],
+}
+
+# Titles that are precise enough to stay title matches (ordered: longest first).
+ROLE_TITLES = [
+    "founding account executive", "head of business development", "head of sales",
+    "vp of sales", "vp sales", "head of growth", "head of marketing", "head of product",
+    "head of engineering", "engineering manager", "product manager", "sales manager",
+    "marketing manager", "cto", "ceo", "cfo", "coo", "cmo", "cro", "founder", "co-founder",
+]
+
+
+def _resolve_role(role: str) -> dict:
+    """'bdr' → {'departments': 'sales'}; 'head of sales' → {'positions': 'head of sales'}."""
+    text = (role or "").strip().lower()
+    if not text:
+        return {}
+    parts = [p.strip() for p in re.split(r"[,/]| or | and ", text) if p.strip()]
+    departments, positions = [], []
+    for part in parts:
+        if part in ROLE_TITLES:
+            positions.append(part)
+            continue
+        matched = None
+        for dept, words in ROLE_FAMILIES.items():
+            if part in words or any(re.search(r"(^|[^a-z])" + re.escape(w) + r"([^a-z]|$)", part) for w in words if len(w) > 2):
+                matched = dept
+                break
+        if matched:
+            departments.append(matched)
+        else:
+            positions.append(part)
+    out = {}
+    if departments:
+        out["departments"] = ",".join(dict.fromkeys(departments))
+    if positions:
+        out["positions"] = ",".join(dict.fromkeys(positions))
+    return out
+
+
+def _resolve_intent_args(tool_name: str, args: dict) -> dict:
+    """Translate intent-level arguments into the REST parameters the API accepts.
+    Explicit API parameters given alongside always win."""
+    args = dict(args)
+    role = args.pop("role", None)
+    hmin = args.pop("headcount_min", None)
+    hmax = args.pop("headcount_max", None)
+    scope = args.pop("country_scope", None)
+
+    if role:
+        for k, v in _resolve_role(str(role)).items():
+            if not args.get(k):
+                args[k] = v
+            else:
+                args[k] = f"{args[k]},{v}"
+
+    if hmin is not None or hmax is not None:
+        if tool_name in ("search_hiring_signals",):
+            if not args.get("team_size"):
+                lo = int(hmin) if hmin is not None else 1
+                args["team_size"] = f"{max(lo, 1)}-{int(hmax)}" if hmax is not None else f"{max(lo, 1)}-1000000"
+        elif tool_name in ("search_funding_signals", "search_acquisition_signals", "search_companies"):
+            if hmin is not None and not args.get("employee_count_min"):
+                args["employee_count_min"] = int(hmin)
+            if hmax is not None and not args.get("employee_count_max"):
+                args["employee_count_max"] = int(hmax)
+
+    if scope and tool_name == "search_hiring_signals" and args.get("countries"):
+        value = args.pop("countries")
+        key = {"hq": "company_countries", "job": "job_countries"}.get(str(scope).lower(), "countries")
+        if not args.get(key):
+            args[key] = value
+        else:
+            args[key] = f"{args[key]},{value}"
+    return args
+
+
+COUNTRY_KEYS = ("countries", "company_countries", "job_countries")
+BREAKDOWN_MAX_TOKENS = 10
+
+
+def _country_breakdown_plan(params: dict):
+    """For a free count over several country tokens, return (key, tokens) so the
+    Worker can report a per-country breakdown; None when not applicable."""
+    if not _is_truthy(params.get("count", False)):
+        return None
+    present = [k for k in COUNTRY_KEYS if params.get(k)]
+    if len(present) != 1:
+        return None
+    key = present[0]
+    tokens = [t.strip() for t in str(params[key]).split(",") if t.strip()]
+    if len(tokens) < 2 or len(tokens) > BREAKDOWN_MAX_TOKENS:
+        return None
+    return key, tokens
+
+
+async def _with_country_breakdown(endpoint: str, params: dict, api_key: str, response):
+    """Attach `byCountry` to a multi-country count response (all calls are free)."""
+    plan = _country_breakdown_plan(params)
+    if not plan or not isinstance(response, dict) or response.get("error"):
+        return response
+    key, tokens = plan
+    per = {}
+    for token in tokens:
+        sub = dict(params)
+        sub[key] = token
+        r = await _call_api(endpoint, sub, api_key)
+        total = None
+        if isinstance(r, dict) and not r.get("error"):
+            total = (r.get("pagination") or {}).get("totalCount")
+        per[token.upper()] = total
+    response["byCountry"] = per
+    empty = [c for c, n in per.items() if n == 0]
+    if empty:
+        response["hint"] = (
+            f"No rows for {', '.join(empty)} with these filters. "
+            "That usually means we hold few postings for those countries, not that the filter failed."
+        )
+    return response
+
+
+def _prepare_tool_args(tool_args, tool_name: str = "") -> tuple:
     """Pre-process tools/call arguments before forwarding to the API.
 
     - pops the Worker-only `verbose` flag (the API returns 400 on unknown params)
     - joins list-valued arguments with "," (the API takes comma-separated strings)
+    - resolves intent-level args (role, headcount_min/max, country_scope)
     Returns (params_for_api, verbose).
     """
     args = dict(tool_args or {})
@@ -1080,6 +1274,7 @@ def _prepare_tool_args(tool_args) -> tuple:
     for k, v in list(args.items()):
         if isinstance(v, (list, tuple)):
             args[k] = ",".join(str(x) for x in v)
+    args = _resolve_intent_args(tool_name, args)
     return args, verbose
 
 
@@ -1318,8 +1513,9 @@ async def _handle_jsonrpc(request_body: dict, api_key: str) -> dict:
             )
         else:
             endpoint = TOOL_ENDPOINTS[tool_name]
-            api_params, verbose = _prepare_tool_args(tool_args)
+            api_params, verbose = _prepare_tool_args(tool_args, tool_name)
             api_response = await _call_api(endpoint, api_params, api_key)
+            api_response = await _with_country_breakdown(endpoint, api_params, api_key, api_response)
 
             if isinstance(api_response, dict) and api_response.get("error") is True:
                 result = _error_result(_format_api_error(api_response))
