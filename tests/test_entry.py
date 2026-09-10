@@ -391,3 +391,27 @@ def test_trim_response_no_meta_when_nothing_trimmed():
     assert "_meta" not in out
     out = entry._trim_response({"data": [{"companyName": "X", "description": "short"}]})
     assert "_meta" not in out
+
+
+def test_trim_caps_sources_and_decodes_json_lists():
+    row = {
+        "companyName": "FOMO",
+        "sources": [{"title": f"s{i}", "url": f"https://x/{i}"} for i in range(18)],
+        "companyCategories": '["Manufacturing","Manufacturing","Software"]',
+        "investors": [{"name": "A"}],
+    }
+    out = entry._trim_response({"data": [row]})
+    r = out["data"][0]
+    assert len(r["sources"]) == 3 and r["sourcesTotal"] == 18
+    assert r["sources"][0]["url"] == "https://x/0"
+    assert r["companyCategories"] == ["Manufacturing", "Software"]
+    assert r["investors"] == [{"name": "A"}]
+    assert out["_meta"]["trimmed"] is True
+    # short lists and non-JSON strings are untouched
+    out2 = entry._trim_response({"data": [{"sources": [1, 2], "companyCategories": "Software"}]})
+    assert out2["data"][0] == {"sources": [1, 2], "companyCategories": "Software"}
+    assert "_meta" not in out2
+    # verbose keeps the raw API shape
+    verbose = json.loads(entry._success_result({"data": [row]}, verbose=True)["content"][0]["text"])
+    assert len(verbose["data"][0]["sources"]) == 18
+    assert isinstance(verbose["data"][0]["companyCategories"], str)

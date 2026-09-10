@@ -5,6 +5,7 @@ Provides funding signals, acquisition signals, job change signals,
 hiring signals, investor data, and company search via MCP tools.
 """
 
+import json
 from pyodide.ffi import to_js
 from js import Response, Headers, Object, fetch, JSON
 
@@ -99,6 +100,12 @@ TRIM_TEXT_FIELDS = {
 TRIM_DROP_FIELDS = {
     "companyLogo", "companyLogoUrl", "logoUrl", "logo_url", "image",
 }
+# Evidence lists: keep the first few entries in trimmed mode (the API returns up
+# to ~20 per row, mostly duplicate coverage of the same announcement).
+TRIM_LIST_FIELDS = {"sources": 3}
+# Fields the API returns as JSON text inside JSON ("[\"A\",\"B\"]"); decoded
+# and de-duplicated in trimmed mode so an LLM sees a real list.
+TRIM_JSON_STRING_FIELDS = {"companyCategories", "categories", "countries", "keywords", "specialties", "companySpecialties"}
 TRIM_META = {"trimmed": True, "hint": "pass verbose=true for full text"}
 
 CORS_HEADERS = {
@@ -730,7 +737,9 @@ hiring (open roles), investors, and companies.
 
 ## Response size
 - By default responses are trimmed: long text fields are cut to 300 chars, logo/image
-  URLs are dropped, and `_meta.trimmed=true` is added when something was cut. Links (`jobUrl`, `sources`,
+  URLs are dropped, `sources` is capped to 3 entries (with `sourcesTotal`), JSON-encoded
+  list fields such as `companyCategories` are decoded and de-duplicated, and
+  `_meta.trimmed=true` is added when something was cut. Links (`jobUrl`, `sources`,
   LinkedIn URLs, `companyWebsite`) and `validThrough` are always kept.
 - Pass `verbose=true` to get the full payload. `verbose` is handled by this server and
   never sent to the API.
@@ -1054,20 +1063,55 @@ def _prepare_tool_args(tool_args) -> tuple:
     return args, verbose
 
 
+def _decode_json_list(text: str):
+    """'["A","A","B"]' → ["A","B"]; anything else → None."""
+    t = text.strip()
+    if not (t.startswith("[") and t.endswith("]")):
+        return None
+    try:
+        parsed = json.loads(t)
+    except Exception:
+        return None
+    if not isinstance(parsed, list):
+        return None
+    seen, out = set(), []
+    for item in parsed:
+        key = json.dumps(item, sort_keys=True) if not isinstance(item, str) else item
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 def _trim_value(value, changed: list | None = None):
-    """Recursively truncate long text fields and drop logo/image fields.
+    """Recursively truncate long text fields, drop logo/image fields, cap
+    evidence lists and decode JSON-encoded list strings.
     `changed` (a one-element list) is set to [True] when anything was altered."""
+    def mark():
+        if changed is not None:
+            changed[:] = [True]
+
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
             if k in TRIM_DROP_FIELDS:
-                if changed is not None:
-                    changed[:] = [True]
+                mark()
                 continue
             if k in TRIM_TEXT_FIELDS and isinstance(v, str) and len(v) > TRIM_MAX_CHARS:
                 out[k] = v[:TRIM_MAX_CHARS] + "…"
-                if changed is not None:
-                    changed[:] = [True]
+                mark()
+            elif k in TRIM_LIST_FIELDS and isinstance(v, list) and len(v) > TRIM_LIST_FIELDS[k]:
+                out[k] = [_trim_value(i, changed) for i in v[: TRIM_LIST_FIELDS[k]]]
+                out[f"{k}Total"] = len(v)
+                mark()
+            elif k in TRIM_JSON_STRING_FIELDS and isinstance(v, str):
+                decoded = _decode_json_list(v)
+                if decoded is None:
+                    out[k] = v
+                else:
+                    out[k] = decoded
+                    mark()
             else:
                 out[k] = _trim_value(v, changed)
         return out
