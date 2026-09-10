@@ -238,7 +238,11 @@ SUBCATEGORIES_PROP = {
 POSITIONS_PROP = {
     "type": "string",
     "description": (
-        "Comma-separated positions (e.g. 'cto,head of engineering'). "
+        "Comma-separated positions matched against the job TITLE "
+        "(e.g. 'cto,head of engineering'; 'bdr' also matches SDR / business "
+        "development / sales development titles). For a whole function "
+        "(any sales role, any engineering role) prefer `departments`: small "
+        "companies word titles freely in their hiring posts. "
         f"Known values: {', '.join(POSITIONS)}."
     ),
 }
@@ -246,7 +250,10 @@ POSITIONS_PROP = {
 DEPARTMENTS_PROP = {
     "type": "string",
     "description": (
-        "Comma-separated departments (e.g. 'engineering,product'). "
+        "Comma-separated departments (e.g. 'sales' or 'engineering,product'). "
+        "Matches LinkedIn's job function AND the title, so it covers job-board "
+        "rows and free-text hiring posts alike. Use this for 'hiring a BDR / "
+        "sales / engineers' questions. "
         f"Allowed values: {', '.join(DEPARTMENTS)}."
     ),
 }
@@ -518,9 +525,11 @@ TOOLS = [
                 "team_size": {
                     "type": "string",
                     "description": (
-                        "Comma-separated COMPANY size ranges (whole company, not the team). "
-                        f"Allowed values: {', '.join(TEAM_SIZE_RANGES)}. "
-                        "Example: team_size='1-10' for micro companies, '1-10,11-50' for up to 50."
+                        "Comma-separated COMPANY headcount ranges (whole company). Any "
+                        "numeric 'min-max' works ('1-9' = under 10, '1-10', '11-50', "
+                        "'51-200') plus '1000-plus'. Combine with company_countries for "
+                        "'small companies headquartered in X'. "
+                        f"Common values: {', '.join(TEAM_SIZE_RANGES)}."
                     ),
                 },
                 "applicants": {
@@ -705,6 +714,14 @@ hiring (open roles), investors, and companies.
   historical analysis. Every row carries `jobUrl` and `validThrough`.
 
 ## Key Workflows
+
+### 0. "Companies under N people hiring a <role> in <countries>"
+`search_hiring_signals` with `team_size=1-<N-1>`, `company_countries=<codes or regions>`
+(HQ; use `job_countries` only if the job location itself matters), `departments=sales`
+(or the relevant department) and `count=true` first, then the list with `limit=100`,
+`sort_by=date_posted`. Prefer `departments` over `positions` for role families: small
+companies post "Software Sales Specialist" or "Founding AE", not "BDR". Run one count
+per country when the user lists several, so the answer says which countries are empty.
 
 ### 1. Funded pool → who is hiring (recommended for "raised recently AND hiring X")
 1. `search_funding_signals` with `countries`, `employee_count_max`, `date_preset`
