@@ -11,7 +11,7 @@ import json
 import re
 import time
 from copy import deepcopy
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from datetime import datetime, timedelta, timezone
 from pyodide.ffi import to_js
 from js import Response, Headers, Object, fetch, JSON
@@ -2313,10 +2313,16 @@ async def _wf_investors(args, key, ledger):
 
 def _source_named_lead(round_row):
     for source in round_row.get("sources") or []:
-        title = source.get("title") if isinstance(source, dict) else ""
-        match = re.search(r"\bled by\s+(.+?)(?:\s+to\b|[,;:|]|$)", str(title or ""), re.I)
-        if match:
-            return match.group(1).strip(" .-")
+        if isinstance(source, dict):
+            url_text = unquote(str(source.get("url") or ""))
+            candidates = [source.get("title"), urlsplit(url_text).path.replace("-", " ")]
+        else:
+            url_text = unquote(str(source or ""))
+            candidates = [urlsplit(url_text).path.replace("-", " ")]
+        for candidate in candidates:
+            match = re.search(r"\bled by\s+(.+?)(?:\s+to\b|[,;:|/]|$)", str(candidate or ""), re.I)
+            if match:
+                return match.group(1).strip(" .-")
     return None
 
 

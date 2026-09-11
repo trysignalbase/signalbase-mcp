@@ -311,7 +311,7 @@ def test_headquarters_match_is_not_reported_as_round_participation(monkeypatch):
         if endpoint == "/signals/investors":
             return envelope([{"name": "Impression Ventures", "headquarters": "Toronto"}, {"name": "Framework Venture Partners"}, {"name": "Smith, Jones & Co"}])
         return envelope([
-            {"companyName": "401GO", "companyWebsite": "401go.com", "roundType": "Series B", "amount": 33000000, "sources": [{"url": "https://news/401go", "title": "401GO Raises $33M Series B Led by Centana Growth Partners to Drive Growth", "publishedAt": "2025-12-09"}],
+            {"companyName": "401GO", "companyWebsite": "401go.com", "roundType": "Series B", "amount": 33000000, "sources": [{"url": "https://news.example/401GO-Raises-%2433M-Series-B-Led-by-Centana-Growth-Partners-to-Drive-Growth", "title": None, "publishedAt": "2025-12-09"}],
              "investors": [{"name": "impression ventures", "isLead": True}, {"name": "Centana"}]},
         ])
     monkeypatch.setattr(entry, "_call_api", api)
@@ -323,7 +323,7 @@ def test_headquarters_match_is_not_reported_as_round_participation(monkeypatch):
     assert round_evidence["stored_lead_flag"] is True
     assert round_evidence["lead_status"] == "contradicted_by_source_title"
     assert round_evidence["source_named_lead"] == "Centana Growth Partners"
-    assert round_evidence["sources"][0]["url"] == "https://news/401go"
+    assert "Centana-Growth-Partners" in round_evidence["sources"][0]["url"]
     assert result["investors_without_matching_rounds"] == ["Framework Venture Partners"]
     assert result["investors_not_checked"] == ["Smith, Jones & Co"]
     assert result["summary"].startswith("1 of 2 checked investors")
