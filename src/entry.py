@@ -1907,7 +1907,7 @@ def _wf_sentence(text, start, end):
 def _wf_office_location_phrase(text):
     patterns = (
         r"\b(?:based|work|working) (?:in|from|at) (?:our|the) (?P<place>[\wÀ-ÖØ-öø-ÿ.' -]{2,60}?) (?:office|hub|studio)\b",
-        r"\b(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in) (?P<place>[^,.;\n]{2,100}?)(?=\s+and\s+(?:serves?|supports?|covers?|works?|sells?)\b|[,.;\n]|$)",
+        r"\b(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in) (?P<place>[^,.;\n]{2,100}?)(?=\s+and\b|[,.;\n]|$)",
         r"\b(?:offices?|hubs?|studios?) (?:in|located in) (?P<place>[^.;\n]{2,120}?)(?=\s+and\s+(?:serves?|supports?|covers?|works?|sells?)\b|[.;\n]|$)",
     )
     for pattern in patterns:
@@ -2346,9 +2346,11 @@ async def _wf_verify_live_posting(posting, public_cache=None):
         return {"source_verified_open": None, "source_verification": {"status": "unsupported_source", "checked_at": checked, "method": "ats_allowlist"}}
     provider, api_url, identity = target
     if public_cache is not None:
-        if api_url not in public_cache:
-            public_cache[api_url] = asyncio.create_task(_wf_public_json(api_url))
-        status, body = await asyncio.shield(public_cache[api_url])
+        tasks = public_cache.setdefault("_tasks", {})
+        loader = public_cache.get("_loader", _wf_public_json)
+        if api_url not in tasks:
+            tasks[api_url] = asyncio.create_task(loader(api_url))
+        status, body = await tasks[api_url]
     else:
         status, body = await _wf_public_json(api_url)
     if status == 404:
@@ -2388,15 +2390,30 @@ async def _wf_verify_companies(companies, args, ledger):
     limit = _wf_int(args, "verification_limit", 10, 1, 50)
     postings = [(company, posting) for company in companies for posting in company["postings"]][:limit]
     ledger["source_checks"] = len(postings)
-    public_cache = {}
     semaphore = asyncio.Semaphore(8)
-    async def check(posting):
+    async def bounded_public(url):
         try:
             async with semaphore:
-                return await asyncio.wait_for(_wf_verify_live_posting(posting, public_cache), timeout=8)
-        except Exception:
+                remaining = ledger.get("_deadline", time.monotonic() + 8) - time.monotonic()
+                if remaining <= 0:
+                    return 0, None
+                return await asyncio.wait_for(_wf_public_json(url), timeout=min(8, remaining))
+        except (Exception, asyncio.CancelledError):
+            return 0, None
+    public_cache = {"_tasks": {}, "_loader": bounded_public}
+    async def check(posting):
+        try:
+            return await _wf_verify_live_posting(posting, public_cache)
+        except (Exception, asyncio.CancelledError):
             return {"source_verified_open": None, "source_verification": {"status": "unknown", "checked_at": datetime.now(timezone.utc).isoformat(), "method": "ats_allowlist", "reason": "verification_timeout_or_error"}}
-    results = await asyncio.gather(*(check(posting) for _, posting in postings))
+    try:
+        results = await asyncio.gather(*(check(posting) for _, posting in postings))
+    finally:
+        pending = [task for task in public_cache["_tasks"].values() if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
     for (company, posting), result in zip(postings, results):
         posting.update(result)
         if result.get("source_verified_open") is True:

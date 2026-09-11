@@ -566,6 +566,9 @@ def test_office_description_requires_requested_place_alignment(monkeypatch):
     assert entry._wf_source_claims({
         "id": "j4", "location": "United States", "descriptionText": "Our office is based in London and serves customers across the United States.",
     }, ["office_presence"], {"job_locations": ["US"]}) == {}
+    assert entry._wf_source_claims({
+        "id": "j5", "location": "United States", "descriptionText": "Our office is based in London and our sales team serves customers across the United States.",
+    }, ["office_presence"], {"job_locations": ["US"]}) == {}
 
 
 def test_caller_defined_startup_and_growth_rules_map_to_api():
@@ -692,6 +695,32 @@ def test_shared_ats_timeout_cannot_cancel_the_whole_workflow(monkeypatch):
     result = call("find_hiring_companies", {"verify_live": True, "verification_limit": 9})
     assert len(result["companies"][0]["postings"]) == 9
     assert all(posting["source_verified_open"] is None for posting in result["companies"][0]["postings"])
+
+
+def test_timed_out_ats_fetches_remain_concurrency_bounded(monkeypatch):
+    original_wait_for = asyncio.wait_for
+    active = {"now": 0, "maximum": 0}
+    async def api(endpoint, params, key):
+        return envelope([{
+            "id": f"j{i}", "companyId": "c1", "companyName": "A", "companyWebsite": "a.example",
+            "jobUrl": f"https://jobs.lever.co/board{i}/job{i}",
+        } for i in range(20)])
+    async def slow_public(url):
+        active["now"] += 1
+        active["maximum"] = max(active["maximum"], active["now"])
+        try:
+            await asyncio.sleep(.02)
+            return 200, {}
+        finally:
+            active["now"] -= 1
+    async def tiny_timeout(awaitable, timeout):
+        return await original_wait_for(awaitable, timeout=.001)
+    monkeypatch.setattr(entry, "_call_api", api)
+    monkeypatch.setattr(entry, "_wf_public_json", slow_public)
+    monkeypatch.setattr(entry.asyncio, "wait_for", tiny_timeout)
+    result = call("find_hiring_companies", {"verify_live": True, "verification_limit": 20})
+    assert len(result["companies"][0]["postings"]) == 20
+    assert active == {"now": 0, "maximum": 8}
 
 
 def test_ats_office_metadata_must_match_requested_place(monkeypatch):
