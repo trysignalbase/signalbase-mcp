@@ -79,7 +79,7 @@ def test_later_page_failure_keeps_paid_results_and_continuation(monkeypatch):
             return {"error": True, "status": 503, "body": {"error": "Unavailable"}}
         return envelope([{"id": "j1", "companyId": "c1", "companyName": "A"}], total=500, more=True)
     monkeypatch.setattr(entry, "_call_api", api)
-    result = call("find_hiring_companies", {})
+    result = call("find_hiring_companies", {"max_pages": 2})
     assert result["status"] == "partial"
     assert result["companies"][0]["company"] == "A"
     assert result["coverage"]["next_page"] == 2
@@ -322,3 +322,21 @@ def test_positive_count_names_the_follow_up_call(monkeypatch):
         return envelope(total=0, paid=False)
     monkeypatch.setattr(entry, "_call_api", empty)
     assert "next_step" not in call("find_hiring_companies", {"count": True})
+
+
+def test_hiring_workflow_defaults_to_one_page_of_fifty(monkeypatch):
+    calls = []
+    async def api(endpoint, params, key):
+        calls.append(params)
+        return envelope([{"id": "j1", "companyId": "c1", "companyName": "A"}], total=500, more=True)
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("find_hiring_companies", {})
+    assert len(calls) == 1 and calls[0]["limit"] == 50
+    assert result["usage"]["credits_used"] == 1 and result["coverage"]["next_page"] == 2
+
+
+def test_outlook_trigger_sources_are_capped_urls():
+    row = {"companyName": "A", "companyWebsite": "a.com", "newRole": "VP Sales", "startDate": "2026-09-01",
+           "sources": [{"url": f"https://s/{i}", "isPrimary": False, "content": "x" * 500} for i in range(6)]}
+    trigger = entry._wf_trigger(row, "job_change", entry._wf_date("2026-09-10"), 90)
+    assert trigger["sources"] == ["https://s/0", "https://s/1", "https://s/2"]
