@@ -281,6 +281,38 @@ def test_headquarters_match_is_not_reported_as_round_participation(monkeypatch):
     assert result["coverage"]["investors_with_matching_rounds"] == 1
 
 
+def test_investor_workflow_has_no_hidden_city_or_country_defaults(monkeypatch):
+    calls = []
+    async def api(endpoint, params, key):
+        calls.append((endpoint, params))
+        if endpoint == "/signals/investors":
+            return envelope([{"name": "Berlin VC"}])
+        return envelope()
+    monkeypatch.setattr(entry, "_call_api", api)
+    missing = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "research_investor_activity", "arguments": {}}}, "key", "hr"))
+    assert missing["result"]["isError"] and "investor_headquarters is required" in missing["result"]["content"][0]["text"]
+    assert calls == []
+    tool = next(t for t in entry.HR_WORKFLOW_TOOLS if t["name"] == "research_investor_activity")
+    assert tool["inputSchema"]["required"] == ["investor_headquarters"]
+    result = call("research_investor_activity", {"investor_headquarters": "Berlin", "round_amount_min": 0, "as_of": "2026-09-10"})
+    funding = calls[1][1]
+    assert calls[0][1]["headquarters"] == "Berlin"
+    assert "countries" not in funding and "currency" not in funding and "amount_min" not in funding
+    assert result["coverage"]["amount_filter"] == "none"
+    floor = call("research_investor_activity", {"investor_headquarters": "Berlin", "as_of": "2026-09-10"})
+    assert calls[-1][1]["currency"] == "USD" and "USD-denominated" in floor["coverage"]["amount_filter"]
+
+
+def test_workflow_results_are_compact_json(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope(total=1, paid=False)
+    monkeypatch.setattr(entry, "_call_api", api)
+    response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "find_hiring_companies", "arguments": {"count": True}}}, "key", "hr"))
+    text = response["result"]["content"][0]["text"]
+    assert "\n" not in text and '": ' not in text
+    assert json.loads(text)["totals"]["postings"] == 1
+
+
 def test_positive_count_names_the_follow_up_call(monkeypatch):
     async def api(endpoint, params, key):
         return envelope(total=3, paid=False)

@@ -2010,7 +2010,10 @@ async def _wf_outlook(args, key, ledger):
 
 async def _wf_investors(args, key, ledger):
     now = _wf_now(args)
-    params = {"filter_version": 2, "headquarters": args.get("investor_headquarters", "Toronto"), "limit": 50, "page": _wf_int(args, "page", 1, 1, 100000)}
+    headquarters = str(args.get("investor_headquarters") or "").strip()
+    if not headquarters:
+        raise WorkflowError("investor_headquarters is required: the investor's city or region text, e.g. Toronto.")
+    params = {"filter_version": 2, "headquarters": headquarters, "limit": 50, "page": _wf_int(args, "page", 1, 1, 100000)}
     investors = await _wf_fetch("/signals/investors", params, key, ledger)
     names = list(dict.fromkeys(r.get("name") for r in investors.get("data", []) if r.get("name")))
     if not names:
@@ -2018,7 +2021,16 @@ async def _wf_investors(args, key, ledger):
     ordinary_names = [name for name in names if "," not in name]
     if not ordinary_names:
         return {"status": "partial", "investors_with_matching_rounds": [], "investors_without_matching_rounds": [], "investors_not_checked": names, "rounds": [], "coverage": {"reason": "Investor names contain commas; exact-name list lookup cannot represent them without ambiguity."}}
-    funding_args = {"filter_version": 2, "investors": ",".join(ordinary_names), "dateFrom": _wf_day(now - timedelta(days=_wf_int(args, "funding_within_days", 365))), "amount_min": _wf_int(args, "round_amount_min", 10000000, 0, 1000000000000), "currency": "USD", "countries": ",".join(_wf_strings(args.get("company_countries")) or ["US"]), "limit": 50, "sort_by": "amount", "sort_order": "desc"}
+    funding_args = {"filter_version": 2, "investors": ",".join(ordinary_names), "dateFrom": _wf_day(now - timedelta(days=_wf_int(args, "funding_within_days", 365))), "limit": 50, "sort_by": "amount", "sort_order": "desc"}
+    amount_min = _wf_int(args, "round_amount_min", 10000000, 0, 1000000000000)
+    if amount_min:
+        # Amounts are stored in the round's own currency; a USD floor can only be
+        # compared with USD rounds. Disclosed in coverage.amount_filter.
+        funding_args["amount_min"] = amount_min
+        funding_args["currency"] = "USD"
+    countries = ",".join(_wf_strings(args.get("company_countries")))
+    if countries:
+        funding_args["countries"] = countries
     funding_args["date_basis"] = "announced"
     funding_args["dateTo"] = _wf_day(now)
     rounds, more, errors = [], True, []
@@ -2043,7 +2055,8 @@ async def _wf_investors(args, key, ledger):
             "summary": f"{len(matched)} of {len(ordinary_names)} checked investors headquartered in {params['headquarters']} appear in a matching round; the rest had none in the rounds returned."
             + (" More rounds exist on next_funding_page." if more else ""),
             "rounds": _trim_response({"data": rounds})["data"], "interpreted_query": funding_args, "errors": errors,
-            "coverage": {"investors_checked": len(ordinary_names), "investors_matching_headquarters": investors.get("pagination", {}).get("totalCount"), "investors_with_matching_rounds": len(matched), "next_investor_page": params["page"] + 1 if investors.get("pagination", {}).get("hasNextPage") else None, "next_funding_page": page if more else None, "evidence_meaning": "Indexed participation in a funding round; not evidence of current ownership. No matching rounds is a coverage result, not proof of no investments."}}
+            "coverage": {"investors_checked": len(ordinary_names), "investors_matching_headquarters": investors.get("pagination", {}).get("totalCount"), "investors_with_matching_rounds": len(matched),
+                         "amount_filter": f"USD-denominated rounds of at least {amount_min:,} USD only; rounds in other currencies are not compared." if amount_min else "none", "next_investor_page": params["page"] + 1 if investors.get("pagination", {}).get("hasNextPage") else None, "next_funding_page": page if more else None, "evidence_meaning": "Indexed participation in a funding round; not evidence of current ownership. No matching rounds is a coverage result, not proof of no investments."}}
 
 
 def _wf_investor_matches(profiles, rounds):
@@ -2115,15 +2128,18 @@ WF_HIRING_PROPS = {
 }
 
 
-def _wf_tool(name, description, properties):
-    return {"name": name, "description": description, "inputSchema": {"type": "object", "properties": properties, "additionalProperties": False}, "annotations": {"readOnlyHint": True, "openWorldHint": True}}
+def _wf_tool(name, description, properties, required=()):
+    schema = {"type": "object", "properties": properties, "additionalProperties": False}
+    if required:
+        schema["required"] = list(required)
+    return {"name": name, "description": description, "inputSchema": schema, "annotations": {"readOnlyHint": True, "openWorldHint": True}}
 
 
 HR_WORKFLOW_TOOLS = [
     _wf_tool("find_hiring_companies", "Find companies with indexed open roles using explicit HQ/job geography, employee size, posting age and optional funding criteria. Returns company groups, posting/source evidence, exact interpreted filters, unsupported requirements and honest pagination. Prefer over assembling generic searches.", WF_HIRING_PROPS),
     _wf_tool("find_funded_hiring_companies", "Find the actual intersection of funding and current hiring. The API joins BEFORE counts/pagination, so no manual domain batching or guessing the efficient search direction. Same evidence and coverage as find_hiring_companies. Funding defaults to last 90 days.", WF_HIRING_PROPS),
     _wf_tool("find_hiring_outlook", "Potential company-level first visible hiring after leadership/funding triggers. Automatically checks prior posting AND announced-join history plus current jobs. Returns supplied cohort floors, never individualized probabilities or promised specific roles. A bounded sample with explicit coverage, not an exhaustive forecast.", {**WF_COMMON_PROPS, "candidate_offset": _wf_prop("integer", "Resume unchecked candidates on the same source page using coverage.next_candidate_offset.", minimum=0), "horizon_days": _wf_prop("integer", "Days from trigger; expired forecast windows excluded.", enum=[30, 60, 90], default=90), "quiet_lookback_days": _wf_prop("integer", "Operational pre-trigger quiet window; screenshot cohort definition is unknown.", minimum=1, maximum=365, default=90), "max_companies": _wf_prop("integer", "Maximum qualifying candidates in a bounded call.", minimum=1, maximum=10, default=3), "funding_rounds": WF_HIRING_PROPS["funding_rounds"], "funding_investor_type": WF_HIRING_PROPS["funding_investor_type"]}),
-    _wf_tool("research_investor_activity", "Find investors by headquarters and join their exact names to observed funding rounds. E.g. Toronto investors in US rounds >= $10M. Uses existing investor-to-round links; reports missing coverage and continuation pages.", {**{k: WF_COMMON_PROPS[k] for k in ("company_countries", "as_of", "max_api_calls", "page", "required_evidence")}, "investor_headquarters": _wf_prop("string", "Investor city/region text, e.g. Toronto."), "round_amount_min": _wf_prop("integer", "Minimum whole USD; default $10M, disclosed in interpreted_query.", minimum=0), "funding_within_days": _wf_prop("integer", "Funding window, default 365 days.", minimum=0, maximum=3650), "funding_page": PAGE_PROP, "max_pages": WF_HIRING_PROPS["max_pages"]}),
+    _wf_tool("research_investor_activity", "Find investors by headquarters and join their exact names to observed funding rounds. E.g. Toronto investors in US rounds >= $10M. Uses existing investor-to-round links; reports missing coverage and continuation pages.", {**{k: WF_COMMON_PROPS[k] for k in ("company_countries", "as_of", "max_api_calls", "page", "required_evidence")}, "investor_headquarters": _wf_prop("string", "Required. Investor city/region text, e.g. Toronto."), "round_amount_min": _wf_prop("integer", "Minimum round size in whole USD; default $10M. Only USD-denominated rounds can be compared; 0 disables the floor and the USD restriction.", minimum=0), "funding_within_days": _wf_prop("integer", "Funding window, default 365 days.", minimum=0, maximum=3650), "funding_page": PAGE_PROP, "max_pages": WF_HIRING_PROPS["max_pages"]}, required=["investor_headquarters"]),
 ]
 
 
@@ -2415,7 +2431,9 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
             else:
                 try:
                     payload = await _run_hr_workflow(tool_name, tool_args, api_key)
-                    result = _success_result(payload, verbose=True)
+                    # Compact JSON: workflow payloads run to tens of KB and indentation
+                    # is pure token overhead for the calling model.
+                    result = {"content": [{"type": "text", "text": json.dumps(payload, separators=(",", ":"), ensure_ascii=False, default=str)}]}
                 except WorkflowError as error:
                     result = _error_result(str(error))
                     if getattr(error, "usage", None):
