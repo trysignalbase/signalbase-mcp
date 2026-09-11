@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Free-call check matrix for the Georgi fixes. Works against `wrangler dev`
+# Free-call check matrix for the country, region and role filter fixes. Works against `wrangler dev`
 # (MCP=http://localhost:8787) or the deployed Worker. Every call uses
 # count=true, so nothing here spends credits.
 #
@@ -43,7 +43,7 @@ count "hiring countries=Narnia"         search_hiring_signals  '{"filter_version
 count "funding countries=EU"            search_funding_signals '{"filter_version":2,"countries":"EU","date_preset":"last_90d","count":true}'          "0"       ">0"
 count "jobchange countries=DACH"        search_job_change_signals '{"filter_version":2,"countries":"DACH","count":true}'                              "0"       ">0"
 
-echo "== Georgi's pool (free counts)"
+echo "== European small-company pool (free counts)"
 count "funding EU <=10 staff last_90d"  search_funding_signals '{"filter_version":2,"countries":"EU","employee_count_max":10,"date_preset":"last_90d","count":true}' "0 (EU unknown)" "~275 on prod data"
 count "hiring EU 1-10 sales last_90d"   search_hiring_signals  '{"filter_version":2,"countries":"EU","team_size":"1-10","departments":"sales","date_preset":"last_90d","count":true}' "0" ">=0, no Syngenta/Publicis after backfill"
 
