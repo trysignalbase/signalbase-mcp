@@ -95,6 +95,71 @@ def test_unavailable_hq_city_does_not_turn_into_job_location(monkeypatch):
     assert result["status"] == "unsupported" and result["usage"]["api_calls"] == 0
 
 
+def test_unsupported_hq_city_offers_labelled_alternatives_without_running_them(monkeypatch):
+    async def api(*args):
+        raise AssertionError("Alternatives are suggestions; nothing may run")
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("find_hiring_outlook", {"company_hq_city": "San Francisco Bay Area", "role": "engineers", "funding_rounds": ["Seed"], "as_of": "2026-09-10"})
+    assert result["status"] == "unsupported" and result["candidates"] == []
+    hiring, outlook = result["alternatives"]
+    assert hiring["tool"] == "find_funded_hiring_companies"
+    assert hiring["arguments"]["job_locations"] == ["San Francisco Bay Area"]
+    assert hiring["arguments"]["funding_within_days"] == 365
+    assert "not HQ evidence" in hiring["answers"]
+    assert outlook["tool"] == "find_hiring_outlook" and outlook["arguments"]["company_countries"] == ["US"]
+    assert "company_hq_city" not in outlook["arguments"]
+    # Every suggested call must itself be valid for its tool.
+    for alternative in result["alternatives"]:
+        props = next(t for t in entry.HR_WORKFLOW_TOOLS if t["name"] == alternative["tool"])["inputSchema"]["properties"]
+        assert set(alternative["arguments"]) <= set(props)
+    unknown_city = call("find_hiring_companies", {"company_hq_city": "Lisbon"})
+    assert unknown_city["alternatives"] == []
+
+
+def test_count_on_a_tool_without_count_mode_explains_itself(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope()
+    monkeypatch.setattr(entry, "_call_api", api)
+    # count=false is the default behaviour and runs normally.
+    assert call("find_hiring_outlook", {"count": False, "funding_rounds": ["Seed"], "as_of": "2026-09-10"})["status"] == "partial"
+    response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "find_hiring_outlook", "arguments": {"count": True, "countries": ["US"]}}}, "key", "hr"))
+    text = response["result"]["content"][0]["text"]
+    assert response["result"]["isError"]
+    assert "no count mode" in text and "company_countries" in text and "Accepted:" in text
+
+
+def test_investor_workflow_hints_name_its_own_arguments():
+    response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "research_investor_activity", "arguments": {"city": "Toronto", "countries": ["US"]}}}, "key", "hr"))
+    text = response["result"]["content"][0]["text"]
+    assert "investor_headquarters" in text and "funded companies' HQ" in text
+    assert "job_locations" not in text.split("Accepted:")[0]
+
+
+def test_count_failure_keeps_the_posting_total(monkeypatch):
+    async def api(endpoint, params, key):
+        if params.get("count_companies"):
+            return {"error": True, "status": 503, "body": {"error": "Unavailable"}}
+        return envelope(total=10, paid=False)
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("find_hiring_companies", {"count": True})
+    assert result["totals"] == {"postings": 10, "companies": None}
+    assert result["status"] == "partial" and result["errors"]
+
+
+def test_outlook_postings_check_runs_through_today(monkeypatch):
+    calls = []
+    async def api(endpoint, params, key):
+        calls.append((endpoint, params))
+        if endpoint == "/signals/funding":
+            return envelope([{"companyName": "A", "companyWebsite": "a.com", "roundType": "seed", "announcedDate": "2026-09-01", "signalId": "t"}])
+        return envelope(total=0, paid=False)
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("find_hiring_outlook", {"funding_rounds": ["Seed"], "as_of": "2026-09-10"})
+    history = [p for e, p in calls if e == "/signals/hiring" and p.get("include_expired") is True]
+    assert history[0]["dateFrom"] == "2026-06-03" and history[0]["dateTo"] == "2026-09-10"
+    assert result["candidates"][0]["quiet_evidence"]["postings_from_lookback_start_to_today"] == 0
+
+
 def test_count_string_cannot_accidentally_spend_credits(monkeypatch):
     async def api(*args):
         raise AssertionError("Invalid boolean must not reach API")

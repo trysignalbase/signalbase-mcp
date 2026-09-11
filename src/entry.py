@@ -1793,17 +1793,72 @@ def _wf_company_results(rows, args):
     return list(companies.values())
 
 
+HQ_CITY_REASON = "Company HQ city/metro is not indexed. job_locations filters jobs and cannot substitute for HQ."
+# Job metros the API can filter (mirrors JOB_METROS in the app) and their country.
+JOB_METRO_COUNTRIES = {"san francisco bay area": "US", "bay area": "US", "sf bay area": "US", "san francisco": "US", "dubai": "AE", "berlin": "DE"}
+WORKFLOW_ONLY_ARGS = ("company_hq_city", "as_of", "max_api_calls", "page", "count", "candidate_offset", "horizon_days", "quiet_lookback_days", "max_companies")
+
+
+def _wf_hq_city_alternatives(args, tool):
+    """Labelled substitutes for an unsupported HQ-city request. Nothing is run:
+    the caller decides whether a proxy answers the user's question."""
+    city = str(args.get("company_hq_city") or "").strip()
+    country = JOB_METRO_COUNTRIES.get(city.lower())
+    base = {k: v for k, v in args.items() if k not in WORKFLOW_ONLY_ARGS}
+    alternatives = []
+    if country:
+        funded = any(base.get(k) for k in ("funding_rounds", "funding_investor_type", "funding_investors", "funding_within_days"))
+        proxy = {k: v for k, v in base.items() if k in WF_HIRING_PROPS}
+        proxy["job_locations"] = [city]
+        if funded and proxy.get("funding_rounds") and "funding_within_days" not in proxy:
+            # A round label ("seed-stage") is a stage question, not a 90-day recency one.
+            proxy["funding_within_days"] = 365
+        alternatives.append({
+            "tool": "find_funded_hiring_companies" if funded else "find_hiring_companies",
+            "arguments": proxy,
+            "answers": f"Companies with indexed open roles located in {city}. Job location is not HQ evidence, and these companies are already hiring rather than about to hire.",
+        })
+    if tool == "find_hiring_outlook":
+        outlook = {k: v for k, v in args.items() if k != "company_hq_city"}
+        if country:
+            outlook["company_countries"] = [country]
+        alternatives.append({
+            "tool": "find_hiring_outlook",
+            "arguments": outlook,
+            "answers": "Previously quiet companies with recent triggers" + (f" headquartered in {country}" if country else "") + "; HQ city is unverified for every candidate.",
+        })
+    return alternatives
+
+
+def _wf_hq_city_unsupported(args, tool, key="companies"):
+    return {
+        "status": "unsupported", key: [],
+        "unverified_requirements": _wf_requirements(args) + [{"requirement": "company_hq_city", "status": "unknown", "requested": args["company_hq_city"], "reason": HQ_CITY_REASON}],
+        "alternatives": _wf_hq_city_alternatives(args, tool),
+        "next_step": "Tell the user HQ city is unavailable. If a labelled alternative still helps, run it and present its results with that label; never call them HQ-verified.",
+        "coverage": {"complete": False, "rows_scanned": 0},
+    }
+
+
 async def _wf_hiring(args, key, ledger, funded=False):
     requirements = _wf_requirements(args)
     if args.get("company_hq_city"):
-        return {"status": "unsupported", "companies": [], "unverified_requirements": requirements + [{"requirement": "company_hq_city", "status": "unknown", "requested": args["company_hq_city"], "reason": "Company HQ city/metro is not indexed. job_locations filters jobs and cannot substitute for HQ."}], "coverage": {"complete": False, "rows_scanned": 0}}
+        return _wf_hq_city_unsupported(args, "find_funded_hiring_companies" if funded else "find_hiring_companies")
     params = _wf_hiring_params(args, funded)
     if args.get("count") is True:
-        postings = await _wf_fetch("/signals/hiring", {**params, "count": True}, key, ledger)
-        try:
-            companies = await _wf_fetch("/signals/hiring", {**params, "count": True, "count_companies": True}, key, ledger)
-        except WorkflowError as error:
-            return {"status": "partial", "interpreted_query": params, "totals": {"postings": postings["pagination"]["totalCount"], "companies": None}, "errors": [str(error)], "coverage": {"complete_for_indexed_filters": False, "count_only": True}}
+        # Two independent free counts; running them together halves the wait on
+        # broad cohorts (a metro regex count can take ~30 s).
+        postings, companies = await asyncio.gather(
+            _wf_fetch("/signals/hiring", {**params, "count": True}, key, ledger),
+            _wf_fetch("/signals/hiring", {**params, "count": True, "count_companies": True}, key, ledger),
+            return_exceptions=True,
+        )
+        if isinstance(postings, BaseException):
+            raise postings
+        if isinstance(companies, BaseException):
+            if not isinstance(companies, WorkflowError):
+                raise companies
+            return {"status": "partial", "interpreted_query": params, "totals": {"postings": postings["pagination"]["totalCount"], "companies": None}, "errors": [str(companies)], "coverage": {"complete_for_indexed_filters": False, "count_only": True}}
         return {"status": "partial" if requirements else "complete", "interpreted_query": params, "totals": {"postings": postings["pagination"]["totalCount"], "companies": companies["pagination"]["totalCount"]}, "unverified_requirements": requirements, "coverage": {"complete_for_indexed_filters": True, "count_only": True}}
     page = _wf_int(args, "page", 1, 1, 100000)
     start_page = page
@@ -1862,7 +1917,7 @@ async def _wf_outlook(args, key, ledger):
     if horizon not in (30, 60, 90):
         raise WorkflowError("horizon_days must be 30, 60 or 90")
     if args.get("company_hq_city"):
-        return {"status": "unsupported", "candidates": [], "unverified_requirements": [{"requirement": "company_hq_city", "status": "unknown", "reason": "HQ city/metro is not indexed. A job in that metro is not company HQ evidence."}]}
+        return _wf_hq_city_unsupported(args, "find_hiring_outlook", "candidates")
     if args.get("job_locations"):
         return {"status": "unsupported", "candidates": [], "unverified_requirements": [{"requirement": "future_job_location", "status": "unknown", "reason": "No job exists yet to filter its location. Supply company_countries to find potential company-level hiring."}]}
     quiet_days = _wf_int(args, "quiet_lookback_days", 90, 1, 365)
@@ -1920,7 +1975,9 @@ async def _wf_outlook(args, key, ledger):
                     continue
             signal_day = _wf_date(trigger["signal_date"])
             history_args = {"filter_version": 2, "company_domain": trigger["domain"], "dateFrom": _wf_day(signal_day - timedelta(days=quiet_days)), "dateTo": _wf_day(signal_day - timedelta(days=1)), "count": True}
-            postings = await _wf_fetch("/signals/hiring", {**history_args, "include_expired": True}, key, ledger)
+            # Postings through today, expired ones included: a job posted after the
+            # trigger (even one that has since closed) is already an observed outcome.
+            postings = await _wf_fetch("/signals/hiring", {**history_args, "dateTo": _wf_day(now), "include_expired": True}, key, ledger)
             joins = await _wf_fetch("/signals/job-changes", history_args, key, ledger)
             current = await _wf_fetch("/signals/hiring", {"filter_version": 2, "company_domain": trigger["domain"], "include_expired": False, "count": True}, key, ledger)
             outcome_args = {"filter_version": 2, "company_domain": trigger["domain"], "dateFrom": _wf_day(signal_day), "dateTo": _wf_day(now), "count": True}
@@ -1934,7 +1991,7 @@ async def _wf_outlook(args, key, ledger):
             errors.append({"domain": trigger["domain"], "reason": str(error), "qualification": "unknown"})
             break
         checked += 1
-        evidence = {"pre_trigger_postings": postings["pagination"]["totalCount"], "pre_trigger_announced_joins": joins["pagination"]["totalCount"], "current_open_postings": current["pagination"]["totalCount"], "post_trigger_announced_joins_excluding_triggers": subsequent_joins["pagination"]["totalCount"]}
+        evidence = {"postings_from_lookback_start_to_today": postings["pagination"]["totalCount"], "pre_trigger_announced_joins": joins["pagination"]["totalCount"], "current_open_postings": current["pagination"]["totalCount"], "post_trigger_announced_joins_excluding_triggers": subsequent_joins["pagination"]["totalCount"]}
         if any(evidence.values()):
             already_hiring.append({"company": trigger["company"], "domain": trigger["domain"], "reason": "Does not satisfy the operational quiet-company definition", "evidence": evidence})
             continue
@@ -1943,7 +2000,7 @@ async def _wf_outlook(args, key, ledger):
             requirements.append({"requirement": "role_specific_future_hire", "status": "unknown", "requested": args["role"], "reason": UNOBSERVED_REQUIREMENTS["role_specific_future_hire"]})
         qualified.append({**trigger, "status": "potential_company_level_hiring", "triggers": triggers, "benchmark": {"floor": BENCHMARK_FLOORS[trigger["signal"]][horizon], "horizon_days_from_trigger": horizon, "window_end": _wf_day(signal_day + timedelta(days=horizon)), "source": "user_supplied_screenshot", "cohort_definition_and_sample_size": "unknown", "individual_probability": False, "combined_signals": False}, "quiet_evidence": evidence, "unverified_requirements": requirements})
     return {"status": "partial", "candidates": qualified, "excluded_examples": already_hiring, "interpreted_query": args, "errors": errors,
-            "coverage": {"candidate_domains_in_source_pages": len(ranked), "candidates_checked": checked, "source_pages_complete": all(not (r.get("pagination") or {}).get("hasNextPage") for _, r in sources), "complete": False, "source_page": common["page"], "next_candidate_offset": offset + checked if offset + checked < len(ranked) else None, "next_source_page": common["page"] + 1 if offset + checked >= len(ranked) and any((r.get("pagination") or {}).get("hasNextPage") for _, r in sources) else None, "quiet_definition": f"No indexed postings or announced joins in {quiet_days} calendar days before trigger day, and no current open postings.", "benchmark_applicability": "Operational quiet definition is not validated against the screenshot's unknown cohort. Use rates as supplied reference floors only."}}
+            "coverage": {"candidate_domains_in_source_pages": len(ranked), "candidates_checked": checked, "source_pages_complete": all(not (r.get("pagination") or {}).get("hasNextPage") for _, r in sources), "complete": False, "source_page": common["page"], "next_candidate_offset": offset + checked if offset + checked < len(ranked) else None, "next_source_page": common["page"] + 1 if offset + checked >= len(ranked) and any((r.get("pagination") or {}).get("hasNextPage") for _, r in sources) else None, "quiet_definition": f"No indexed postings from {quiet_days} calendar days before the trigger day through today (expired included), no announced joins in those {quiet_days} days or after the trigger (the trigger itself excluded), and no current open postings.", "benchmark_applicability": "Operational quiet definition is not validated against the screenshot's unknown cohort. Use rates as supplied reference floors only."}}
 
 
 async def _wf_investors(args, key, ledger):
@@ -1981,7 +2038,7 @@ def _wf_prop(kind, description, **extra):
 
 
 WF_COMMON_PROPS = {
-    "company_countries": _wf_prop("array", "Company HQ countries/regions. Use job_locations for where a job is located.", items={"type": "string"}),
+    "company_countries": _wf_prop("array", "Company HQ countries/regions. Leave empty unless the user restricts where companies are headquartered; places the user lists for the job itself go in job_locations only.", items={"type": "string"}),
     "company_hq_city": _wf_prop("string", "Only if HQ city/metro is a hard requirement. Currently returns unsupported; never substitutes job location."),
     "role": _wf_prop("string", "Role or alternatives: bdr, engineers, bdr or engineers, GTM, GTM engineer, CFO."),
     "headcount_min": _wf_prop("integer", "Minimum company employees, inclusive.", minimum=1),
@@ -1994,7 +2051,7 @@ WF_COMMON_PROPS = {
 
 WF_HIRING_PROPS = {
     **WF_COMMON_PROPS,
-    "job_locations": _wf_prop("array", "OR of job countries/regions and supported cities/metros. E.g. [Belgium, US, Netherlands, Luxembourg, Dubai]. Dubai restricts UAE jobs to Dubai; Bay Area means job metro, not HQ. Also supports Berlin and San Francisco.", items={"type": "string"}),
+    "job_locations": _wf_prop("array", "OR of job countries/regions and supported cities/metros. E.g. [Belgium, US, Netherlands, Luxembourg, Dubai]. Dubai restricts UAE jobs to Dubai; Bay Area means job metro, not HQ. Also supports Berlin and San Francisco. Do not copy these places into company_countries as well: that ANDs an HQ filter.", items={"type": "string"}),
     "exclude_company_countries": _wf_prop("array", "Exclude company HQ countries only; can combine Poland jobs with excluding Polish HQ.", items={"type": "string"}),
     "subcategories": _wf_prop("array", "Company sector labels such as legal, cybersecurity, ai.", items={"type": "string"}),
     "company_domain": _wf_prop("array", "Optional company-domain pool.", items={"type": "string"}),
@@ -2028,11 +2085,38 @@ HR_WORKFLOW_TOOLS = [
 ]
 
 
+WORKFLOW_ARG_HINTS = {
+    "count": "{tool} has no count mode: it returns a bounded evidence batch. Remove count.",
+    "countries": "Use company_countries for company HQ and job_locations for where the job is.",
+    "job_countries": "Use job_locations for where the job is.",
+    "limit": "Use page_size/max_pages on the hiring workflows, max_companies on find_hiring_outlook.",
+}
+INVESTOR_ARG_HINTS = {
+    "countries": "Use company_countries for the funded companies' HQ.",
+    "city": "Use investor_headquarters for the investor's city.",
+    "headquarters": "Use investor_headquarters for the investor's city.",
+    "amount_min": "Use round_amount_min (whole USD).",
+}
+
+
+def _wf_arg_hint(tool, arg):
+    hint = (INVESTOR_ARG_HINTS.get(arg) if tool == "research_investor_activity" else None) or WORKFLOW_ARG_HINTS.get(arg)
+    return hint.format(tool=tool) if hint else None
+
+
 async def _run_hr_workflow(name, args, api_key):
     descriptor = next(t for t in HR_WORKFLOW_TOOLS if t["name"] == name)
-    unknown = set(args) - set(descriptor["inputSchema"]["properties"])
+    props = descriptor["inputSchema"]["properties"]
+    if "count" not in props and args.get("count") is False:
+        # "count": false asks for the default behaviour; nothing to reject.
+        args = {k: v for k, v in args.items() if k != "count"}
+    unknown = sorted(set(args) - set(props))
     if unknown:
-        raise WorkflowError("Unknown workflow arguments: " + ", ".join(sorted(unknown)))
+        hints = [h for h in (_wf_arg_hint(name, k) for k in unknown) if h]
+        raise WorkflowError(
+            f"Unknown {name} arguments: {', '.join(unknown)}. " + " ".join(hints)
+            + (" " if hints else "") + "Accepted: " + ", ".join(props) + "."
+        )
     for field, value in args.items():
         prop = descriptor["inputSchema"]["properties"][field]
         kind = prop["type"]
