@@ -1908,7 +1908,7 @@ def _wf_office_location_phrase(text):
     patterns = (
         r"\b(?:based|work|working) (?:in|from|at) (?:our|the) (?P<place>[\wÀ-ÖØ-öø-ÿ.' -]{2,60}?) (?:office|hub|studio)\b",
         r"\b(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in) (?P<place>[^,.;\n]{2,100}?)(?=\s+and\b|[,.;\n]|$)",
-        r"\b(?:offices?|hubs?|studios?) (?:in|located in) (?P<place>[^.;\n]{2,120}?)(?=\s+and\s+(?:serves?|supports?|covers?|works?|sells?)\b|[.;\n]|$)",
+        r"\b(?:offices?|hubs?|studios?) (?:in|located in) (?P<place>[^.;\n]{2,120}?)(?=\s+and\s+(?:(?:our|the)\b|(?:serves?|supports?|covers?|works?|sells?)\b)|[.;\n]|$)",
     )
     for pattern in patterns:
         match = re.search(pattern, text or "", re.I)

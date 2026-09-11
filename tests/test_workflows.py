@@ -569,6 +569,9 @@ def test_office_description_requires_requested_place_alignment(monkeypatch):
     assert entry._wf_source_claims({
         "id": "j5", "location": "United States", "descriptionText": "Our office is based in London and our sales team serves customers across the United States.",
     }, ["office_presence"], {"job_locations": ["US"]}) == {}
+    assert entry._wf_source_claims({
+        "id": "j6", "location": "United States", "descriptionText": "We have offices in London and our sales team serves customers across the United States.",
+    }, ["office_presence"], {"job_locations": ["US"]}) == {}
 
 
 def test_caller_defined_startup_and_growth_rules_map_to_api():
