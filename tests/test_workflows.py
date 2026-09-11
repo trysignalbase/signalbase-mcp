@@ -309,6 +309,17 @@ def test_investor_activity_rejects_rounds_with_conflicting_window_dates(monkeypa
     assert "do not all support" in result["rejected_rounds"][0]["reason"]
 
 
+def test_investor_failure_does_not_claim_no_matches(monkeypatch):
+    async def api(endpoint, params, key):
+        if endpoint == "/signals/investors":
+            return envelope([{"name": "Example Ventures", "headquarters": "Toronto"}])
+        return {"error": True, "status": 503, "body": {"error": "Unavailable"}}
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("research_investor_activity", {"investor_headquarters": "Toronto", "as_of": "2026-09-10"})
+    assert result["query_status"] == "partial" and result["match_status"] == "unknown"
+
+
 def test_headquarters_match_is_not_reported_as_round_participation(monkeypatch):
     async def api(endpoint, params, key):
         if endpoint == "/signals/investors":
@@ -363,9 +374,9 @@ def test_workflow_results_are_compact_json(monkeypatch):
     text = response["result"]["content"][0]["text"]
     assert "\n" not in text and '": ' not in text
     assert json.loads(text)["totals"]["postings"] == 1
-    assert response["result"]["structuredContent"]["totals"]["postings"] == 1
+    assert "structuredContent" not in response["result"]
     tool = next(tool for tool in entry.HR_WORKFLOW_TOOLS if tool["name"] == "find_hiring_companies")
-    assert tool["outputSchema"]["type"] == "object"
+    assert "outputSchema" not in tool
 
 
 def test_positive_count_names_the_follow_up_call(monkeypatch):
@@ -587,7 +598,7 @@ def test_live_ats_verification_is_bounded_and_supports_required_evidence(monkeyp
             "title": "Marketer", "jobUrl": "https://jobs.lever.co/atsco/abc",
         }])
     checks = []
-    async def verify(posting):
+    async def verify(posting, public_cache=None):
         checks.append(posting["id"])
         return {"source_verified_open": True, "source_verification": {"status": "open", "method": "test_public_api", "offices": ["London"]}}
     monkeypatch.setattr(entry, "_call_api", api)
@@ -618,3 +629,54 @@ def test_funding_identity_uses_explicit_source_title():
         "sources": [{"url": "https://news.example/story", "title": "North Star raises a Series A"}],
     })
     assert status == "supported_by_source_title" and "explicitly names" in reason
+    generic, _ = entry._wf_funding_identity("Seed", "seed.example", {
+        "sources": [{"url": "https://news.example/story", "title": "Seed round raises $10M"}],
+    })
+    assert generic == "needs_source_review"
+
+
+def test_ats_api_absence_is_unknown_not_closed(monkeypatch):
+    async def missing(url):
+        return 404, None
+    monkeypatch.setattr(entry, "_wf_public_json", missing)
+    result = asyncio.run(entry._wf_verify_live_posting({"url": "https://jobs.lever.co/acme/abc"}))
+    assert result["source_verified_open"] is None
+    assert result["source_verification"]["status"] == "not_visible_in_public_api"
+
+
+def test_ashby_board_fetch_is_deduplicated(monkeypatch):
+    calls = []
+    async def api(endpoint, params, key):
+        return envelope([
+            {"id": "j1", "companyId": "c1", "companyName": "A", "companyWebsite": "a.example", "jobUrl": "https://jobs.ashbyhq.com/acme/one"},
+            {"id": "j2", "companyId": "c1", "companyName": "A", "companyWebsite": "a.example", "jobUrl": "https://jobs.ashbyhq.com/acme/two"},
+        ])
+    async def public(url):
+        calls.append(url)
+        return 200, {"jobs": [
+            {"jobPostingId": "one", "jobUrl": "https://jobs.ashbyhq.com/acme/one"},
+            {"jobPostingId": "two", "jobUrl": "https://jobs.ashbyhq.com/acme/two"},
+        ]}
+    monkeypatch.setattr(entry, "_call_api", api)
+    monkeypatch.setattr(entry, "_wf_public_json", public)
+    result = call("find_hiring_companies", {"verify_live": True, "verification_limit": 2})
+    assert len(calls) == 1
+    assert all(posting["source_verified_open"] for posting in result["companies"][0]["postings"])
+
+
+def test_ats_office_metadata_must_match_requested_place(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope([{
+            "id": "j1", "companyId": "c1", "companyName": "A", "companyWebsite": "a.example",
+            "jobUrl": "https://boards.greenhouse.io/acme/jobs/123",
+        }])
+    async def verify(posting, public_cache=None):
+        return {"source_verified_open": True, "source_verification": {"status": "open", "offices": ["London"]}}
+    monkeypatch.setattr(entry, "_call_api", api)
+    monkeypatch.setattr(entry, "_wf_verify_live_posting", verify)
+    [company] = call("find_hiring_companies", {"job_locations": ["Poland"], "required_evidence": ["office_presence"]})["companies"]
+    assert company["match_status"] == "partial_evidence"
+
+
+def test_malformed_source_url_does_not_abort_lead_evidence():
+    assert entry._source_named_lead({"sources": [{"url": "http://[bad", "title": "Round led by Safe Capital"}]}) == "Safe Capital"

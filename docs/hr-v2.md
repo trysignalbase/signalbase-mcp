@@ -19,8 +19,8 @@ unknown requirements, continuation and actual usage. A partial batch is never ca
 exhaustive. A data workflow can use multiple API credits; each underlying data request
 costs one credit. Request and 45-second execution budgets are enforced.
 Responses separate `query_status`, `match_status`, and `evidence_level`; legacy
-`status` mirrors query completeness. MCP clients also receive the same JSON through
-`structuredContent` with a declared output schema.
+`status` mirrors query completeness. The JSON remains in the standard text-content
+response used by the negotiated 2025-03 protocol revision.
 
 Examples:
 

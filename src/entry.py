@@ -2115,12 +2115,15 @@ def _wf_funding_identity(company_name, domain, funding):
     is weaker self-published evidence; otherwise the relationship needs review.
     """
     sources = [source if isinstance(source, dict) else {"url": source} for source in (funding.get("sources") or [])]
-    company_tokens = set(_wf_identity_tokens(company_name))
+    company_tokens = _wf_identity_tokens(company_name)
+    normalized_company = " ".join(company_tokens)
     titled = []
     owned = []
     for source in sources:
-        title_tokens = set(_wf_identity_tokens(source.get("title")))
-        if company_tokens and company_tokens <= title_tokens:
+        normalized_title = " ".join(_wf_identity_tokens(source.get("title")))
+        # Preserve order and require a multi-token company name. Single generic
+        # names such as "Seed" or "Up" cannot validate themselves from a title.
+        if len(company_tokens) >= 2 and re.search(rf"(?<![a-z0-9]){re.escape(normalized_company)}(?![a-z0-9])", normalized_title):
             titled.append(source)
         try:
             host = urlsplit(source.get("url") or "").hostname or ""
@@ -2233,13 +2236,19 @@ def _wf_company_results(rows, args):
 async def _wf_public_json(url):
     """Fetch only a caller-independent, allowlisted public ATS API URL."""
     try:
-        response = await fetch(url, to_js({"method": "GET", "headers": {"Accept": "application/json"}}, dict_converter=Object.fromEntries))
+        response = await fetch(url, to_js({"method": "GET", "redirect": "error", "headers": {"Accept": "application/json"}}, dict_converter=Object.fromEntries))
         status = int(response.status)
         if status == 404:
             return status, None
         if not response.ok:
             return status, None
-        return status, json.loads(await response.text())
+        content_length = response.headers.get("content-length")
+        if content_length and int(content_length) > 5_000_000:
+            return status, None
+        text = await response.text()
+        if len(text) > 5_000_000:
+            return status, None
+        return status, json.loads(text)
     except Exception:
         return 0, None
 
@@ -2271,15 +2280,20 @@ def _wf_ats_target(url):
     return None
 
 
-async def _wf_verify_live_posting(posting):
+async def _wf_verify_live_posting(posting, public_cache=None):
     target = _wf_ats_target(posting.get("url"))
     checked = datetime.now(timezone.utc).isoformat()
     if not target:
         return {"source_verified_open": None, "source_verification": {"status": "unsupported_source", "checked_at": checked, "method": "ats_allowlist"}}
     provider, api_url, identity = target
-    status, body = await _wf_public_json(api_url)
+    if public_cache is not None:
+        if api_url not in public_cache:
+            public_cache[api_url] = asyncio.create_task(_wf_public_json(api_url))
+        status, body = await public_cache[api_url]
+    else:
+        status, body = await _wf_public_json(api_url)
     if status == 404:
-        return {"source_verified_open": False, "source_verification": {"status": "closed_or_removed", "checked_at": checked, "method": provider + "_public_api", "http_status": 404}}
+        return {"source_verified_open": None, "source_verification": {"status": "not_visible_in_public_api", "checked_at": checked, "method": provider + "_public_api", "http_status": 404}}
     if not isinstance(body, dict):
         return {"source_verified_open": None, "source_verification": {"status": "unknown", "checked_at": checked, "method": provider + "_public_api", "http_status": status or None}}
     matched = body
@@ -2287,7 +2301,7 @@ async def _wf_verify_live_posting(posting):
         candidates = body.get("jobs") or []
         matched = next((job for job in candidates if str(job.get("jobPostingId") or job.get("id") or "") == identity["job_id"] or str(job.get("jobUrl") or "").rstrip("/").endswith("/" + identity["job_id"])), None)
         if matched is None:
-            return {"source_verified_open": False, "source_verification": {"status": "closed_or_removed", "checked_at": checked, "method": "ashby_public_api", "http_status": status}}
+            return {"source_verified_open": None, "source_verification": {"status": "not_visible_in_public_api", "checked_at": checked, "method": "ashby_public_api", "http_status": status}}
     raw_location = matched.get("location")
     categories = matched.get("categories") if isinstance(matched.get("categories"), dict) else {}
     location = raw_location if isinstance(raw_location, str) else raw_location.get("name") if isinstance(raw_location, dict) else categories.get("location")
@@ -2315,9 +2329,12 @@ async def _wf_verify_companies(companies, args, ledger):
     limit = _wf_int(args, "verification_limit", 10, 1, 50)
     postings = [(company, posting) for company in companies for posting in company["postings"]][:limit]
     ledger["source_checks"] = len(postings)
+    public_cache = {}
+    semaphore = asyncio.Semaphore(8)
     async def check(posting):
         try:
-            return await asyncio.wait_for(_wf_verify_live_posting(posting), timeout=8)
+            async with semaphore:
+                return await asyncio.wait_for(_wf_verify_live_posting(posting, public_cache), timeout=8)
         except Exception:
             return {"source_verified_open": None, "source_verification": {"status": "unknown", "checked_at": datetime.now(timezone.utc).isoformat(), "method": "ats_allowlist", "reason": "verification_timeout_or_error"}}
     results = await asyncio.gather(*(check(posting) for _, posting in postings))
@@ -2328,7 +2345,7 @@ async def _wf_verify_companies(companies, args, ledger):
         elif result.get("source_verified_open") is False:
             posting["open_status"] = "source_closed_or_removed"
         offices = (result.get("source_verification") or {}).get("offices") or []
-        if offices and "office_presence" in requested:
+        if offices and "office_presence" in requested and _wf_office_place_matches(" ".join(offices), args):
             company["_source_claims"].setdefault("office_presence", {
                 "requirement": "office_presence", "status": "supported_source_verified",
                 "offices": offices, "posting_id": posting.get("id"), "source_url": posting.get("url"),
@@ -2651,7 +2668,8 @@ async def _wf_investors(args, key, ledger):
     checked = [p for p in investors.get("data") or [] if p.get("name") in ordinary_names]
     matched, unmatched = _wf_investor_matches(checked, rounds)
     query_status = "partial" if more or errors or investors.get("pagination", {}).get("hasNextPage") or len(ordinary_names) != len(names) else "complete"
-    return {"status": query_status, "query_status": query_status, "match_status": "supported_indexed" if matched else "no_matches", "evidence_level": "mixed" if rounds else "indexed",
+    match_status = "supported_indexed" if matched else "no_matches" if query_status == "complete" else "unknown"
+    return {"status": query_status, "query_status": query_status, "match_status": match_status, "evidence_level": "mixed" if rounds else "indexed",
             "investors_with_matching_rounds": matched,
             "investors_without_matching_rounds": unmatched,
             "investors_not_checked": [n for n in names if n not in ordinary_names],
@@ -2667,10 +2685,17 @@ def _source_named_lead(round_row):
     for source in round_row.get("sources") or []:
         if isinstance(source, dict):
             url_text = unquote(str(source.get("url") or ""))
-            candidates = [source.get("title"), urlsplit(url_text).path.replace("-", " ")]
+            try:
+                path = urlsplit(url_text).path.replace("-", " ")
+            except ValueError:
+                path = ""
+            candidates = [source.get("title"), path]
         else:
             url_text = unquote(str(source or ""))
-            candidates = [urlsplit(url_text).path.replace("-", " ")]
+            try:
+                candidates = [urlsplit(url_text).path.replace("-", " ")]
+            except ValueError:
+                candidates = []
         for candidate in candidates:
             match = re.search(r"\bled by\s+(.+?)(?:\s+to\b|[,;:|/]|$)", str(candidate or ""), re.I)
             if match:
@@ -2783,7 +2808,6 @@ def _wf_tool(name, description, properties, required=()):
     if required:
         schema["required"] = list(required)
     return {"name": name, "description": description, "inputSchema": schema,
-            "outputSchema": {"type": "object", "additionalProperties": True},
             "annotations": {"readOnlyHint": True, "openWorldHint": True}}
 
 
@@ -3143,10 +3167,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
                     payload = await _run_hr_workflow(tool_name, tool_args, api_key)
                     # Compact JSON: workflow payloads run to tens of KB and indentation
                     # is pure token overhead for the calling model.
-                    result = {
-                        "content": [{"type": "text", "text": json.dumps(payload, separators=(",", ":"), ensure_ascii=False, default=str)}],
-                        "structuredContent": payload,
-                    }
+                    result = {"content": [{"type": "text", "text": json.dumps(payload, separators=(",", ":"), ensure_ascii=False, default=str)}]}
                 except WorkflowError as error:
                     result = _error_result(str(error))
                     result["_meta"] = {"usage": getattr(error, "usage", {"api_calls": 0, "credits_used": 0})}
