@@ -2811,6 +2811,8 @@ async def _run_hr_workflow(name, args, api_key):
         _validate_value(field, value, props[field])
     if args.get("headcount_min") is not None and args.get("headcount_max") is not None and args["headcount_min"] > args["headcount_max"]:
         raise WorkflowError("headcount_min cannot exceed headcount_max")
+    if args.get("headcount_growth_window") is not None and args.get("headcount_growth_min") is None:
+        raise WorkflowError("headcount_growth_window requires headcount_growth_min")
     ledger = {"api_calls": 0, "credits_used": 0, "max_api_calls": _wf_int(args, "max_api_calls", 12, 2, 30), "_deadline": time.monotonic() + 45}
     try:
         if name == "find_hiring_outlook":

@@ -552,6 +552,10 @@ def test_nested_startup_definition_is_validated_before_io(monkeypatch):
         "name": "find_hiring_companies", "arguments": {"startup_definition": {"max_headcount": "tiny", "surprise": True}},
     }}, "key", "hr"))
     assert response["result"]["isError"] and calls == []
+    response = asyncio.run(entry._handle_jsonrpc({"id": 2, "method": "tools/call", "params": {
+        "name": "find_hiring_companies", "arguments": {"headcount_growth_window": "6m"},
+    }}, "key", "hr"))
+    assert response["result"]["isError"] and "requires headcount_growth_min" in response["result"]["content"][0]["text"] and calls == []
 
 
 def test_live_ats_verification_is_bounded_and_supports_required_evidence(monkeypatch):
