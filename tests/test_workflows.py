@@ -461,6 +461,8 @@ def test_sector_preset_maps_to_industry_labels_on_workflows_and_search_tools(mon
     assert "Food and Beverage Manufacturing" in api_params["categories"].split("|") and "sector" not in api_params
     response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "search_job_change_signals", "arguments": {"sector": "mining"}}}, "key", "hr"))
     assert response["result"]["isError"] and "expected one of" in response["result"]["content"][0]["text"]
+    creative = entry._wf_hiring_params({"sector": "creative/digital", "as_of": "2026-09-10"})
+    assert {"Design Services", "Advertising Services", "Public Relations and Communications Services"} <= set(creative["categories"].split("|"))
 
 
 def test_search_tool_sends_job_locations_as_json_and_compact_counts_drop_empty_data(monkeypatch):

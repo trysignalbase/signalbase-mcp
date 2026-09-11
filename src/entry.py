@@ -1934,9 +1934,17 @@ SECTOR_INDUSTRIES = {
     "consumer packaged goods": FMCG_INDUSTRIES, "fast moving consumer goods": FMCG_INDUSTRIES,
     "food and beverage": [i for i in FMCG_INDUSTRIES if "food" in i.lower() or "beverage" in i.lower() or "dairy" in i.lower()],
     "beauty": ["Personal Care Product Manufacturing", "Cosmetics", "Beauty", "Retail Health and Personal Care Products"],
+    "creative/digital": [
+        "Design Services", "Graphic Design", "Advertising Services", "Marketing Services",
+        "Public Relations and Communications Services", "Media Production",
+        "Online Audio and Video Media", "Photography", "Animation and Post-production",
+        "Broadcast Media Production and Distribution",
+    ],
 }
 SECTOR_INDUSTRIES["cosmetics"] = SECTOR_INDUSTRIES["beauty"]
 SECTOR_INDUSTRIES["personal care"] = SECTOR_INDUSTRIES["beauty"]
+SECTOR_INDUSTRIES["creative"] = SECTOR_INDUSTRIES["creative/digital"]
+SECTOR_INDUSTRIES["creative and digital"] = SECTOR_INDUSTRIES["creative/digital"]
 
 
 def _wf_sector_categories(sector):
@@ -2731,7 +2739,7 @@ WF_HIRING_PROPS = {
     "posted_within_days": _wf_prop("integer", "Posting recency, e.g. 30. Omit for all indexed open postings.", minimum=0, maximum=3650),
     "min_distinct_role_titles": _wf_prop("integer", "For multiple roles, set 2. Company must have this many distinct normalized titles in the SAME filtered cohort, before counts/paging. These are advertised titles, not verified seats.", minimum=2, maximum=100),
     "max_postings_per_company": _wf_prop("integer", "Keep companies with at most this many postings in the SAME filtered cohort. This is only a posting-count proxy; it does not establish a first hire, employee count or office opening.", minimum=1, maximum=100),
-    "sector": _wf_prop("string", "Industry preset mapped to stored company industry labels: fmcg / cpg / consumer goods, food and beverage, beauty / cosmetics / personal care. Use subcategories for tech sectors (legal, cybersecurity, ai).", enum=sorted(SECTOR_INDUSTRIES)),
+    "sector": _wf_prop("string", "Industry preset mapped to stored company industry labels: fmcg / cpg / consumer goods, food and beverage, beauty / cosmetics / personal care, creative/digital. Use subcategories for tech sectors (legal, cybersecurity, ai).", enum=sorted(SECTOR_INDUSTRIES)),
     "posted_from": _wf_prop("string", "Explicit ISO posting start date; overrides posted_within_days."),
     "posted_to": _wf_prop("string", "Explicit ISO posting end date; combines with minimum posting age. Open-only filtering still applies."),
     "posting_age_days_min": _wf_prop("integer", "At least this many days since original posting, e.g. 31 for over a month. Missing original dates excluded. Does not prove continuously unfilled.", minimum=0, maximum=3650),
@@ -2839,6 +2847,8 @@ label on a large company, a recruiting platform posting for clients.
   source identity; keep contradicted or unverified rounds out of exact matches.
 - sector=fmcg (or cpg, consumer goods, food and beverage, beauty) maps to the
   stored industry labels; FMCG has no subcategory.
+- sector=creative/digital maps a narrow creative-services industry cohort; combine it
+  with role='design or marketing' for creative/digital recruiting-market requests.
 - max_postings_per_company can surface companies with few matching regional
   postings, but this does not prove a first hire, office opening or employee count.
 

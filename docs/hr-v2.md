@@ -35,6 +35,9 @@ Examples:
 Bay Area means job location; HQ city remains unavailable. Company HQ
 countries are specified separately with `company_countries`. The HQ-only
 `exclude_company_countries` filter can find Polish jobs at foreign companies.
+For creative/digital recruiting, `sector="creative/digital"` maps a documented
+narrow set of creative-services industries and can be combined with
+`role="design or marketing"`; the interpreted query exposes the exact mapping.
 
 `required_evidence` makes unsupported claims explicit. Explicit employer wording can
 support founder-led sales/right-hand, first-hire, scaling, office or budget claims and
