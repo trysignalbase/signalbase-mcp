@@ -11,7 +11,7 @@ The same deployment serves two experiences, using the same API key:
 | Worker URL | `https://mcp.trysignalbase.com` | `https://mcp.trysignalbase.com/v2` |
 | Keyed URL for Cowork | `/api/mcp/c/<key>` | `/api/mcp/v2/c/<key>` |
 | Tool names and arguments | All original names/arguments retained | Four HR workflows plus the six original tools and recruiting prompts |
-| Responses | Full original payload and `data` rows | Compact payload and `data` rows, plus grouped hiring companies |
+| Responses | Full original payload and `data` rows | Compact text plus `structuredContent`, grouped hiring companies and independent query/match/evidence status |
 | Improved matching | Automatic; unknown country literals remain accepted | Automatic; unknown countries return an actionable tool error |
 | Hiring freshness | History included as before | Open postings by default; historical end dates/calendar presets retain history |
 | Country count breakdown | Off unless requested | On for multi-country counts, up to six bounded probes |

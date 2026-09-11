@@ -8,8 +8,8 @@ historical records are not repaired or backfilled.
 
 | Tool | Purpose |
 |---|---|
-| `find_hiring_companies` | Companies with indexed open roles, explicit HQ/job geography, headcount, posting age, remote wording and staffing exclusion. |
-| `find_funded_hiring_companies` | Funding/hiring intersection joined in the API before counts and pagination; includes matching funding evidence. |
+| `find_hiring_companies` | Companies with indexed open roles, explicit HQ/job geography, headcount/growth, caller-defined startup rules, posting age, source-text claims and optional live ATS checks. |
+| `find_funded_hiring_companies` | Funding/hiring intersection joined in the API before counts and pagination; includes matching funding and source-identity evidence. |
 | `find_hiring_outlook` | Bounded search for leadership/funding triggers, followed by pre-trigger posting/announced-join checks and current hiring checks. |
 | `research_investor_activity` | Investor HQ lookup joined to actual round-participation records, e.g. Toronto investors in major US rounds. |
 
@@ -18,23 +18,30 @@ The hiring workflows return separate exact posting/company totals for `count=tru
 unknown requirements, continuation and actual usage. A partial batch is never called
 exhaustive. A data workflow can use multiple API credits; each underlying data request
 costs one credit. Request and 45-second execution budgets are enforced.
+Responses separate `query_status`, `match_status`, and `evidence_level`; legacy
+`status` mirrors query completeness. MCP clients also receive the same JSON through
+`structuredContent` with a declared output schema.
 
 Examples:
 
 ```json
 {"name":"find_hiring_companies","arguments":{"role":"bdr","headcount_max":9,"job_locations":["Belgium","US","Netherlands","Luxembourg","Dubai"],"required_evidence":["founder_led_sales"],"count":true}}
 {"name":"find_funded_hiring_companies","arguments":{"role":"GTM","funding_within_days":90,"posting_age_days_min":31,"required_evidence":["continuous_vacancy"],"max_pages":1}}
+{"name":"find_hiring_companies","arguments":{"role":"design or marketing","company_countries":["GB"],"headcount_max":200,"headcount_growth_window":"3m","headcount_growth_min":10,"startup_definition":{"founded_year_min":2020,"max_headcount":200},"posted_within_days":30,"verify_live":true}}
 {"name":"research_investor_activity","arguments":{"investor_headquarters":"Toronto","company_countries":["US"],"round_amount_min":10000000,"funding_within_days":365}}
 ```
 
 `job_locations` ORs countries and supported job metros. Dubai stays a city in the UAE.
-Bay Area means job location; HQ city and office presence are unavailable. Company HQ
+Bay Area means job location; HQ city remains unavailable. Company HQ
 countries are specified separately with `company_countries`. The HQ-only
 `exclude_company_countries` filter can find Polish jobs at foreign companies.
 
-`required_evidence` makes unsupported claims explicit. Founder origin, office presence,
-founder-led sales, a first actual hire, budget, current ownership, current funding stage
-and continuously unfilled jobs are not inferred from proxies. Stored company headcounts
+`required_evidence` makes unsupported claims explicit. Explicit employer wording can
+support founder-led sales/right-hand, first-hire, scaling, office or budget claims and
+is returned with a bounded quote and job URL. Public Greenhouse, Lever and Ashby records
+can support live-vacancy status; all other job sources remain unknown. Founder origin,
+current ownership, current funding stage and continuously unfilled jobs are never
+inferred from proxies. Stored company headcounts
 are labelled stored/estimated rather than verified exact. Round labels and job
 associations can be wrong; source URLs and data-quality limits
 are returned without rewriting those records.
@@ -119,8 +126,9 @@ rates, and does not infer a particular role from an any-hire benchmark.
   Namibia. The classic endpoint continues accepting legacy country literals.
 
 “Open” is an indexed freshness estimate: `validThrough` has not passed, or a posting without
-an expiry is at most 60 days old. It does not confirm that the employer is still
-accepting applications. Use posting/source links as evidence.
+an expiry is at most 60 days old. Set `verify_live=true` or require
+`verified_live_vacancy` to check supported public ATS records; unsupported URLs remain
+unknown rather than being fetched. Use posting/source links as evidence.
 
 Each executed data search costs one credit, including empty results. `count=true`
 is free. All explicit controls remain available on both endpoints.

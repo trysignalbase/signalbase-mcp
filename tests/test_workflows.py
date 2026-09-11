@@ -47,7 +47,9 @@ def test_funded_hiring_is_one_joined_query_and_keeps_evidence(monkeypatch):
     assert len(result["companies"]) == 1 and len(result["companies"][0]["postings"]) == 2
     assert result["companies"][0]["funding"] == [funding]
     assert result["companies"][0]["domain"] == "a.com"
-    assert result["status"] == "partial"
+    assert result["status"] == "complete"
+    assert result["query_status"] == "complete"
+    assert result["match_status"] == "partial_evidence"
     assert result["unverified_requirements"][0]["status"] == "unknown"
     assert result["usage"]["credits_used"] == 1
 
@@ -122,7 +124,8 @@ def test_count_on_a_tool_without_count_mode_explains_itself(monkeypatch):
         return envelope()
     monkeypatch.setattr(entry, "_call_api", api)
     # count=false is the default behaviour and runs normally.
-    assert call("find_hiring_outlook", {"count": False, "funding_rounds": ["Seed"], "as_of": "2026-09-10"})["status"] == "partial"
+    empty = call("find_hiring_outlook", {"count": False, "funding_rounds": ["Seed"], "as_of": "2026-09-10"})
+    assert empty["query_status"] == "complete" and empty["match_status"] == "no_match_at_reference_time"
     response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "find_hiring_outlook", "arguments": {"count": True, "countries": ["US"]}}}, "key", "hr"))
     text = response["result"]["content"][0]["text"]
     assert response["result"]["isError"]
@@ -360,6 +363,9 @@ def test_workflow_results_are_compact_json(monkeypatch):
     text = response["result"]["content"][0]["text"]
     assert "\n" not in text and '": ' not in text
     assert json.loads(text)["totals"]["postings"] == 1
+    assert response["result"]["structuredContent"]["totals"]["postings"] == 1
+    tool = next(tool for tool in entry.HR_WORKFLOW_TOOLS if tool["name"] == "find_hiring_companies")
+    assert tool["outputSchema"]["type"] == "object"
 
 
 def test_positive_count_names_the_follow_up_call(monkeypatch):
@@ -441,9 +447,10 @@ def test_seed_asks_do_not_use_arbitrary_headcount_caps(monkeypatch):
     monkeypatch.setattr(entry, "_call_api", api)
     result = call("find_funded_hiring_companies", {"funding_rounds": ["Seed"]})
     assert result["companies"][0]["headcount"] == 900
-    assert result["companies"][0]["qualification"] == "partial_pending_funding_source_verification"
+    assert result["companies"][0]["qualification"] == "matches_indexed_filters"
+    assert result["query_status"] == "complete"
     review = result["companies"][0]["funding_evidence_review"][0]
-    assert review["source_identity_status"] == "not_verified_by_index"
+    assert review["source_identity_status"] == "needs_source_review"
     assert review["sources"][0]["url"] == "https://news/a"
 
 
@@ -469,3 +476,105 @@ def test_search_tool_sends_job_locations_as_json_and_compact_counts_drop_empty_d
     assert "data" not in body and body["countOnly"] is True and body["pagination"]["totalCount"] == 7
     classic = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": {"count": True}}}, "key"))
     assert json.loads(classic["result"]["content"][0]["text"])["data"] == []
+
+
+def test_source_text_requirements_are_quoted_without_inference(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope([{
+            "id": "j1", "companyId": "c1", "companyName": "Explicit", "companyWebsite": "explicit.example",
+            "title": "Founding AE", "jobUrl": "https://explicit.example/jobs/1",
+            "descriptionText": "Join our team. Our founder currently leads sales across Europe. You will be the right-hand to our founder.",
+        }])
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("find_hiring_companies", {"required_evidence": ["founder_led_sales", "founder_right_hand"]})
+    [company] = result["companies"]
+    assert result["query_status"] == "complete"
+    assert company["match_status"] == "supported_with_source_text"
+    evidence = {item["requirement"]: item for item in company["criteria"]}
+    assert evidence["founder_led_sales"]["quote"].startswith("Our founder currently leads sales")
+    assert evidence["founder_right_hand"]["source_url"].endswith("/jobs/1")
+    assert company["unverified_requirements"] == []
+
+
+def test_titles_and_job_locations_do_not_infer_first_hire_or_office(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope([{
+            "id": "j1", "companyId": "c1", "companyName": "Careful", "companyWebsite": "careful.example",
+            "title": "Founding Engineer", "location": "Berlin", "jobUrl": "https://careful.example/jobs/1",
+            "descriptionText": "Build the product with a distributed team.",
+        }])
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    [company] = call("find_hiring_companies", {"required_evidence": ["first_hire", "office_opening"]})["companies"]
+    assert company["match_status"] == "partial_evidence"
+    assert {item["requirement"] for item in company["unverified_requirements"]} == {"first_hire", "office_opening"}
+
+
+def test_caller_defined_startup_and_growth_rules_map_to_api():
+    params = entry._wf_hiring_params({
+        "headcount_max": 200,
+        "headcount_growth_window": "6m",
+        "headcount_growth_min": 12.5,
+        "startup_definition": {"max_headcount": 100, "founded_year_min": 2020, "require_funding": True},
+        "as_of": "2026-09-10",
+    })
+    assert params["team_size"] == "1-100"
+    assert params["founded_year_min"] == 2020
+    assert params["headcount_growth_window"] == "6m" and params["headcount_growth_min"] == 12.5
+    assert params["funding_date_from"] == "2026-06-12"
+
+
+def test_nested_startup_definition_is_validated_before_io(monkeypatch):
+    calls = []
+    async def api(*args):
+        calls.append(args)
+        return envelope()
+    monkeypatch.setattr(entry, "_call_api", api)
+    response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {
+        "name": "find_hiring_companies", "arguments": {"startup_definition": {"max_headcount": "tiny", "surprise": True}},
+    }}, "key", "hr"))
+    assert response["result"]["isError"] and calls == []
+
+
+def test_live_ats_verification_is_bounded_and_supports_required_evidence(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope([{
+            "id": "j1", "companyId": "c1", "companyName": "ATS Co", "companyWebsite": "ats.example",
+            "title": "Designer", "jobUrl": "https://boards.greenhouse.io/atsco/jobs/123",
+        }, {
+            "id": "j2", "companyId": "c1", "companyName": "ATS Co", "companyWebsite": "ats.example",
+            "title": "Marketer", "jobUrl": "https://jobs.lever.co/atsco/abc",
+        }])
+    checks = []
+    async def verify(posting):
+        checks.append(posting["id"])
+        return {"source_verified_open": True, "source_verification": {"status": "open", "method": "test_public_api", "offices": ["London"]}}
+    monkeypatch.setattr(entry, "_call_api", api)
+    monkeypatch.setattr(entry, "_wf_verify_live_posting", verify)
+    result = call("find_hiring_companies", {
+        "required_evidence": ["verified_live_vacancy", "office_presence"],
+        "verification_limit": 1,
+    })
+    [company] = result["companies"]
+    assert checks == ["j1"] and result["usage"]["source_checks"] == 1
+    assert company["match_status"] == "supported_source_verified"
+    assert company["postings"][0]["open_status"] == "source_verified_open"
+    assert company["postings"][1]["source_verified_open"] is None
+
+
+@pytest.mark.parametrize("url,provider", [
+    ("https://job-boards.greenhouse.io/acme/jobs/123", "greenhouse"),
+    ("https://jobs.lever.co/acme/a-b_c", "lever"),
+    ("https://jobs.ashbyhq.com/acme/abc_123", "ashby"),
+])
+def test_only_allowlisted_ats_urls_are_translated(url, provider):
+    assert entry._wf_ats_target(url)[0] == provider
+    assert entry._wf_ats_target("https://example.com/jobs/123") is None
+
+
+def test_funding_identity_uses_explicit_source_title():
+    status, reason = entry._wf_funding_identity("North Star", "northstar.example", {
+        "sources": [{"url": "https://news.example/story", "title": "North Star raises a Series A"}],
+    })
+    assert status == "supported_by_source_title" and "explicitly names" in reason
