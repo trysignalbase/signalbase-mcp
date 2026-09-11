@@ -522,10 +522,29 @@ def test_explicit_office_location_wording_is_evidence_of_presence_only(monkeypat
         }])
 
     monkeypatch.setattr(entry, "_call_api", api)
-    [company] = call("find_hiring_companies", {"required_evidence": ["office_presence", "office_opening"]})["companies"]
+    [company] = call("find_hiring_companies", {"job_locations": ["Poland"], "required_evidence": ["office_presence", "office_opening"]})["companies"]
     criteria = {item["requirement"]: item for item in company["criteria"]}
     assert criteria["office_presence"]["source_field"] == "job_location"
     assert [item["requirement"] for item in company["unverified_requirements"]] == ["office_opening"]
+
+
+def test_office_description_requires_requested_place_alignment(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope([{
+            "id": "j1", "companyId": "c1", "companyName": "Asana", "companyWebsite": "asana.com",
+            "title": "Engineer", "location": "Warsaw", "jobUrl": "https://example.test/job/1",
+            "descriptionText": "This role is based in our Warsaw office with an office-centric hybrid schedule.",
+        }, {
+            "id": "j2", "companyId": "c2", "companyName": "Elsewhere", "companyWebsite": "elsewhere.example",
+            "title": "Engineer", "location": "Warsaw", "jobUrl": "https://example.test/job/2",
+            "descriptionText": "This role is based in our London office.",
+        }])
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    companies = call("find_hiring_companies", {"job_locations": ["Poland"], "required_evidence": ["office_presence"]})["companies"]
+    assert companies[0]["match_status"] == "supported_with_source_text"
+    assert companies[0]["criteria"][-1]["quote"].startswith("This role is based in our Warsaw office")
+    assert companies[1]["match_status"] == "partial_evidence"
 
 
 def test_caller_defined_startup_and_growth_rules_map_to_api():

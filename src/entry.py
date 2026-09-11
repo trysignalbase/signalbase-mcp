@@ -1850,7 +1850,7 @@ SOURCE_TEXT_PATTERNS = {
         re.I,
     ),
     "office_presence": re.compile(
-        r"\b(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in)\b",
+        r"\b(?:(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in)|(?:based|work|working) (?:in|from|at) (?:our|the) (?:[\w.'-]+ ){1,3}(?:office|hub|studio))\b",
         re.I,
     ),
     "office_opening": re.compile(
@@ -1875,6 +1875,13 @@ SOURCE_TEXT_PATTERNS = {
     ),
 }
 
+OFFICE_PLACE_HINTS = {
+    "pl": ("poland", "warsaw", "warszawa", "wroclaw", "krakow", "gdansk", "poznan"),
+    "poland": ("poland", "warsaw", "warszawa", "wroclaw", "krakow", "gdansk", "poznan"),
+    "us": ("united states", "usa", "new york", "boston", "austin", "chicago", "seattle", "san francisco", "los angeles"),
+    "united states": ("united states", "usa", "new york", "boston", "austin", "chicago", "seattle", "san francisco", "los angeles"),
+}
+
 
 def _wf_sentence(text, start, end):
     """Return the containing sentence/line, bounded for model-safe evidence."""
@@ -1884,17 +1891,32 @@ def _wf_sentence(text, start, end):
     return re.sub(r"\s+", " ", text[left + 1:right]).strip()[:500]
 
 
-def _wf_source_claims(row, requested):
+def _wf_office_place_matches(text, args):
+    places = _wf_strings(args.get("job_locations"))
+    if not places:
+        return True
+    folded = text.lower()
+    for place in places:
+        terms = OFFICE_PLACE_HINTS.get(place.lower(), (place.lower(),))
+        if any(re.search(rf"(?<![a-z]){re.escape(term)}(?![a-z])", folded) for term in terms):
+            return True
+    return False
+
+
+def _wf_source_claims(row, requested, args):
     text = html.unescape(row.get("descriptionText") or "")
     claims = {}
     for requirement in requested:
         pattern = SOURCE_TEXT_PATTERNS.get(requirement)
         match = pattern.search(text) if pattern and text else None
         if match:
+            quote = _wf_sentence(text, match.start(), match.end())
+            if requirement in {"office_presence", "office_opening"} and not _wf_office_place_matches(quote, args):
+                continue
             claims[requirement] = {
                 "requirement": requirement,
                 "status": "supported_source_text",
-                "quote": _wf_sentence(text, match.start(), match.end()),
+                "quote": quote,
                 "posting_id": row.get("id"),
                 "source_url": row.get("jobUrl"),
                 "qualification": "Explicit employer wording in the indexed posting; not independently verified.",
@@ -1904,6 +1926,7 @@ def _wf_source_claims(row, requested):
         "office_presence" in requested
         and "office_presence" not in claims
         and re.search(r"\boffices?\s+(?:in|located in)\b", location, re.I)
+        and _wf_office_place_matches(location, args)
     ):
         claims["office_presence"] = {
             "requirement": "office_presence",
@@ -2183,7 +2206,7 @@ def _wf_company_results(rows, args):
             first = min((description.lower().find(term.lower()) for term in terms if term.lower() in description.lower()), default=0)
             excerpt = description[max(0, first - 100):first + 400] if terms else None
             company["postings"].append({"id": row.get("id"), "title": html.unescape(row.get("title") or ""), "location": row.get("location"), "job_country": row.get("jobCountry"), "posted": row.get("datePosted"), "valid_through": row.get("validThrough"), "url": row.get("jobUrl"), "open_status": "indexed_open", "indexed_open_as_of": args.get("as_of") or "request_time", "source_verified_open": None, **({"description_excerpt": excerpt} if excerpt else {})})
-            for requirement, evidence in _wf_source_claims(row, requested).items():
+            for requirement, evidence in _wf_source_claims(row, requested, args).items():
                 company["_source_claims"].setdefault(requirement, evidence)
         for funding in row.get("matchedFunding") or []:
             if not any(f.get("signalId") == funding.get("signalId") for f in company["funding"]):
