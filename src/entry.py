@@ -14,7 +14,7 @@ from copy import deepcopy
 from urllib.parse import unquote, urlsplit
 from datetime import datetime, timedelta, timezone
 from pyodide.ffi import to_js
-from js import Response, Headers, Object, fetch, JSON
+from js import Response, Headers, Object, TextDecoder, fetch, JSON
 
 # ──────────────────────────────────────────────────────────────
 # Constants
@@ -1850,7 +1850,7 @@ SOURCE_TEXT_PATTERNS = {
         re.I,
     ),
     "office_presence": re.compile(
-        r"\b(?:(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in)|(?:based|work|working) (?:in|from|at) (?:our|the) (?:[\w.'-]+ ){1,3}(?:office|hub|studio))\b",
+        r"\b(?:(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in)|(?:based|work|working) (?:in|from|at) (?:our|the) (?:[\w.'-]+ ){1,3}(?:office|hub|studio)|offices? (?:in|located in))\b",
         re.I,
     ),
     "office_opening": re.compile(
@@ -1876,6 +1876,19 @@ SOURCE_TEXT_PATTERNS = {
 }
 
 OFFICE_PLACE_HINTS = {
+    "be": ("belgium", "brussels", "bruxelles", "brussel", "antwerp", "antwerpen", "ghent", "gent", "leuven", "liege", "liège"),
+    "belgium": ("belgium", "brussels", "bruxelles", "brussel", "antwerp", "antwerpen", "ghent", "gent", "leuven", "liege", "liège"),
+    "nl": ("netherlands", "amsterdam", "rotterdam", "utrecht", "the hague", "den haag", "eindhoven", "groningen", "nederland", "holland"),
+    "netherlands": ("netherlands", "amsterdam", "rotterdam", "utrecht", "the hague", "den haag", "eindhoven", "groningen", "nederland", "holland"),
+    "lu": ("luxembourg",),
+    "luxembourg": ("luxembourg",),
+    "gb": ("united kingdom", "uk", "london", "manchester", "birmingham", "edinburgh", "glasgow", "bristol", "leeds"),
+    "uk": ("united kingdom", "uk", "london", "manchester", "birmingham", "edinburgh", "glasgow", "bristol", "leeds"),
+    "united kingdom": ("united kingdom", "uk", "london", "manchester", "birmingham", "edinburgh", "glasgow", "bristol", "leeds"),
+    "de": ("germany", "berlin", "munich", "münchen", "hamburg", "frankfurt", "cologne", "köln", "stuttgart", "düsseldorf", "dusseldorf"),
+    "germany": ("germany", "berlin", "munich", "münchen", "hamburg", "frankfurt", "cologne", "köln", "stuttgart", "düsseldorf", "dusseldorf"),
+    "fr": ("france", "paris", "lyon", "marseille", "toulouse", "bordeaux", "lille", "nantes"),
+    "france": ("france", "paris", "lyon", "marseille", "toulouse", "bordeaux", "lille", "nantes"),
     "pl": ("poland", "warsaw", "warszawa", "wroclaw", "krakow", "gdansk", "poznan"),
     "poland": ("poland", "warsaw", "warszawa", "wroclaw", "krakow", "gdansk", "poznan"),
     "us": ("united states", "usa", "new york", "boston", "austin", "chicago", "seattle", "san francisco", "los angeles"),
@@ -1891,7 +1904,20 @@ def _wf_sentence(text, start, end):
     return re.sub(r"\s+", " ", text[left + 1:right]).strip()[:500]
 
 
-def _wf_office_place_matches(text, args):
+def _wf_office_location_phrase(text):
+    patterns = (
+        r"\b(?:based|work|working) (?:in|from|at) (?:our|the) (?P<place>[\wÀ-ÖØ-öø-ÿ.' -]{2,60}?) (?:office|hub|studio)\b",
+        r"\b(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in) (?P<place>[^,.;\n]{2,100}?)(?=\s+and\s+(?:serves?|supports?|covers?|works?|sells?)\b|[,.;\n]|$)",
+        r"\b(?:offices?|hubs?|studios?) (?:in|located in) (?P<place>[^.;\n]{2,120}?)(?=\s+and\s+(?:serves?|supports?|covers?|works?|sells?)\b|[.;\n]|$)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text or "", re.I)
+        if match:
+            return match.group("place").strip(" ,:-")
+    return None
+
+
+def _wf_office_place_matches(text, args, row_location=None):
     places = _wf_strings(args.get("job_locations"))
     if not places:
         return True
@@ -1900,6 +1926,15 @@ def _wf_office_place_matches(text, args):
         terms = OFFICE_PLACE_HINTS.get(place.lower(), (place.lower(),))
         if any(re.search(rf"(?<![a-z]){re.escape(term)}(?![a-z])", folded) for term in terms):
             return True
+    # The API has already applied its full job-geography resolver to
+    # row_location. Requiring the office phrase to share a meaningful location
+    # token ties "Warsaw office" to that matched row without accepting unrelated
+    # prose such as "London office serving customers across the US".
+    ignored = {"office", "offices", "hub", "studio", "based", "work", "working", "remote", "hybrid", "our", "the"}
+    office_tokens = {token for token in re.findall(r"[\wÀ-ÖØ-öø-ÿ]+", folded) if len(token) > 2 and token not in ignored}
+    location_tokens = {token for token in re.findall(r"[\wÀ-ÖØ-öø-ÿ]+", str(row_location or "").lower()) if len(token) > 2 and token not in ignored}
+    if office_tokens & location_tokens:
+        return True
     return False
 
 
@@ -1911,8 +1946,10 @@ def _wf_source_claims(row, requested, args):
         match = pattern.search(text) if pattern and text else None
         if match:
             quote = _wf_sentence(text, match.start(), match.end())
-            if requirement in {"office_presence", "office_opening"} and not _wf_office_place_matches(quote, args):
-                continue
+            if requirement in {"office_presence", "office_opening"}:
+                office_place = _wf_office_location_phrase(quote)
+                if not office_place or not _wf_office_place_matches(office_place, args, row.get("location")):
+                    continue
             claims[requirement] = {
                 "requirement": requirement,
                 "status": "supported_source_text",
@@ -1922,11 +1959,12 @@ def _wf_source_claims(row, requested, args):
                 "qualification": "Explicit employer wording in the indexed posting; not independently verified.",
             }
     location = html.unescape(row.get("location") or "")
+    office_location = location if re.search(r"\boffices?\s+(?:in|located in)\b", location, re.I) else _wf_office_location_phrase(location)
     if (
         "office_presence" in requested
         and "office_presence" not in claims
-        and re.search(r"\boffices?\s+(?:in|located in)\b", location, re.I)
-        and _wf_office_place_matches(location, args)
+        and office_location
+        and _wf_office_place_matches(office_location, args, location)
     ):
         claims["office_presence"] = {
             "requirement": "office_presence",
@@ -2233,6 +2271,27 @@ def _wf_company_results(rows, args):
     return list(companies.values())
 
 
+async def _wf_bounded_response_text(response, maximum=5_000_000):
+    """Decode a Fetch response incrementally so chunked bodies stay bounded."""
+    reader = response.body.getReader()
+    decoder = TextDecoder.new("utf-8")
+    parts, size = [], 0
+    while True:
+        chunk = await reader.read()
+        if chunk.done:
+            break
+        size += int(chunk.value.byteLength)
+        if size > maximum:
+            try:
+                await reader.cancel()
+            except Exception:
+                pass
+            return None
+        parts.append(str(decoder.decode(chunk.value, to_js({"stream": True}, dict_converter=Object.fromEntries))))
+    parts.append(str(decoder.decode()))
+    return "".join(parts)
+
+
 async def _wf_public_json(url):
     """Fetch only a caller-independent, allowlisted public ATS API URL."""
     try:
@@ -2245,8 +2304,8 @@ async def _wf_public_json(url):
         content_length = response.headers.get("content-length")
         if content_length and int(content_length) > 5_000_000:
             return status, None
-        text = await response.text()
-        if len(text) > 5_000_000:
+        text = await _wf_bounded_response_text(response)
+        if text is None:
             return status, None
         return status, json.loads(text)
     except Exception:
@@ -2289,7 +2348,7 @@ async def _wf_verify_live_posting(posting, public_cache=None):
     if public_cache is not None:
         if api_url not in public_cache:
             public_cache[api_url] = asyncio.create_task(_wf_public_json(api_url))
-        status, body = await public_cache[api_url]
+        status, body = await asyncio.shield(public_cache[api_url])
     else:
         status, body = await _wf_public_json(api_url)
     if status == 404:
@@ -2345,7 +2404,7 @@ async def _wf_verify_companies(companies, args, ledger):
         elif result.get("source_verified_open") is False:
             posting["open_status"] = "source_closed_or_removed"
         offices = (result.get("source_verification") or {}).get("offices") or []
-        if offices and "office_presence" in requested and _wf_office_place_matches(" ".join(offices), args):
+        if offices and "office_presence" in requested and _wf_office_place_matches(" ".join(offices), args, posting.get("location")):
             company["_source_claims"].setdefault("office_presence", {
                 "requirement": "office_presence", "status": "supported_source_verified",
                 "offices": offices, "posting_id": posting.get("id"), "source_url": posting.get("url"),

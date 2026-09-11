@@ -35,6 +35,7 @@ def _install_stubs() -> None:
         js.Headers = _Placeholder
         js.Object = _Placeholder
         js.JSON = _Placeholder
+        js.TextDecoder = _Placeholder
 
         async def _fetch(*args, **kwargs):  # never called in unit tests
             raise RuntimeError("js.fetch stub called")

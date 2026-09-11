@@ -549,6 +549,10 @@ def test_office_description_requires_requested_place_alignment(monkeypatch):
             "id": "j2", "companyId": "c2", "companyName": "Elsewhere", "companyWebsite": "elsewhere.example",
             "title": "Engineer", "location": "Warsaw", "jobUrl": "https://example.test/job/2",
             "descriptionText": "This role is based in our London office.",
+        }, {
+            "id": "j3", "companyId": "c3", "companyName": "Brussels", "companyWebsite": "brussels.example",
+            "title": "Engineer", "location": "Brussels", "jobUrl": "https://example.test/job/3",
+            "descriptionText": "This role is based in our Brussels office.",
         }])
 
     monkeypatch.setattr(entry, "_call_api", api)
@@ -556,6 +560,11 @@ def test_office_description_requires_requested_place_alignment(monkeypatch):
     assert companies[0]["match_status"] == "supported_with_source_text"
     assert companies[0]["criteria"][-1]["quote"].startswith("This role is based in our Warsaw office")
     assert companies[1]["match_status"] == "partial_evidence"
+    belgium = call("find_hiring_companies", {"job_locations": ["Belgium"], "required_evidence": ["office_presence"]})["companies"]
+    assert belgium[2]["match_status"] == "supported_with_source_text"
+    assert entry._wf_source_claims({
+        "id": "j4", "location": "United States", "descriptionText": "Our office is based in London and serves customers across the United States.",
+    }, ["office_presence"], {"job_locations": ["US"]}) == {}
 
 
 def test_caller_defined_startup_and_growth_rules_map_to_api():
@@ -662,6 +671,26 @@ def test_ashby_board_fetch_is_deduplicated(monkeypatch):
     result = call("find_hiring_companies", {"verify_live": True, "verification_limit": 2})
     assert len(calls) == 1
     assert all(posting["source_verified_open"] for posting in result["companies"][0]["postings"])
+
+
+def test_shared_ats_timeout_cannot_cancel_the_whole_workflow(monkeypatch):
+    original_wait_for = asyncio.wait_for
+    async def api(endpoint, params, key):
+        return envelope([{
+            "id": f"j{i}", "companyId": "c1", "companyName": "A", "companyWebsite": "a.example",
+            "jobUrl": f"https://jobs.ashbyhq.com/acme/job{i}",
+        } for i in range(9)])
+    async def slow_public(url):
+        await asyncio.sleep(.02)
+        return 200, {"jobs": []}
+    async def tiny_timeout(awaitable, timeout):
+        return await original_wait_for(awaitable, timeout=.001)
+    monkeypatch.setattr(entry, "_call_api", api)
+    monkeypatch.setattr(entry, "_wf_public_json", slow_public)
+    monkeypatch.setattr(entry.asyncio, "wait_for", tiny_timeout)
+    result = call("find_hiring_companies", {"verify_live": True, "verification_limit": 9})
+    assert len(result["companies"][0]["postings"]) == 9
+    assert all(posting["source_verified_open"] is None for posting in result["companies"][0]["postings"])
 
 
 def test_ats_office_metadata_must_match_requested_place(monkeypatch):
