@@ -340,3 +340,55 @@ def test_outlook_trigger_sources_are_capped_urls():
            "sources": [{"url": f"https://s/{i}", "isPrimary": False, "content": "x" * 500} for i in range(6)]}
     trigger = entry._wf_trigger(row, "job_change", entry._wf_date("2026-09-10"), 90)
     assert trigger["sources"] == ["https://s/0", "https://s/1", "https://s/2"]
+
+
+def test_narrow_role_reports_same_function_postings_per_place(monkeypatch):
+    calls = []
+    async def api(endpoint, params, key):
+        calls.append(params)
+        places = json.loads(params.get("job_locations", "[]"))
+        broad = params.get("departments") == "sales"
+        if places == ["Dubai"]:
+            return envelope(total=5 if broad else 0, paid=False)
+        return envelope(total=200 if broad else 12, paid=False)
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("find_hiring_companies", {"role": "bdr", "headcount_max": 9, "job_locations": ["US", "Dubai"], "count": True})
+    assert result["by_place"]["Dubai"] == {"postings": 0, "broader_sales_postings": 5}
+    assert result["by_place"]["US"]["postings"] == 12
+    assert "role='sales'" in result["hints"][0] and "Dubai" in result["hints"][0]
+    assert all(p["team_size"] == "1-9" for p in calls)
+
+
+def test_seed_asks_exclude_large_companies_unless_headcount_given(monkeypatch):
+    params = entry._wf_hiring_params({"funding_rounds": ["Seed"], "as_of": "2026-09-10"})
+    assert params["team_size"] == "1-500"
+    assert entry._wf_hiring_params({"funding_rounds": ["Seed"], "headcount_max": 2000, "as_of": "2026-09-10"})["team_size"] == "1-2000"
+    assert "team_size" not in entry._wf_hiring_params({"funding_rounds": ["Series C"], "as_of": "2026-09-10"})
+    async def api(endpoint, params, key):
+        return envelope(total=3, paid=False)
+    monkeypatch.setattr(entry, "_call_api", api)
+    assert "misattributed" in call("find_funded_hiring_companies", {"funding_rounds": ["Seed"], "count": True})["guards"][0]
+
+
+def test_sector_preset_maps_to_industry_labels_on_workflows_and_search_tools(monkeypatch):
+    params = entry._wf_hiring_params({"sector": "fmcg", "as_of": "2026-09-10"})
+    assert "Personal Care Product Manufacturing" in params["categories"].split("|")
+    api_params, _, _ = entry._prepare_tool_args({"positions": "cfo", "sector": "fmcg"}, "search_job_change_signals", "hr")
+    assert "Food and Beverage Manufacturing" in api_params["categories"].split("|") and "sector" not in api_params
+    response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "search_job_change_signals", "arguments": {"sector": "mining"}}}, "key", "hr"))
+    assert response["result"]["isError"] and "Known sectors" in response["result"]["content"][0]["text"]
+
+
+def test_search_tool_sends_job_locations_as_json_and_compact_counts_drop_empty_data(monkeypatch):
+    api_params, _, _ = entry._prepare_tool_args({"job_locations": ["Poland"], "exclude_company_countries": "PL"}, "search_hiring_signals", "classic")
+    assert json.loads(api_params["job_locations"]) == ["Poland"]
+    api_params, _, _ = entry._prepare_tool_args({"job_locations": "Belgium, Dubai"}, "search_hiring_signals", "classic")
+    assert json.loads(api_params["job_locations"]) == ["Belgium", "Dubai"]
+    async def api(endpoint, params, key):
+        return {"success": True, "data": [], "pagination": {"totalCount": 7}, "meta": {"endpoint": "signals.hiring", "creditsUsed": 0}}
+    monkeypatch.setattr(entry, "_call_api", api)
+    hr = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": {"count": True, "by_country": False}}}, "key", "hr"))
+    body = json.loads(hr["result"]["content"][0]["text"])
+    assert "data" not in body and body["countOnly"] is True and body["pagination"]["totalCount"] == 7
+    classic = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": {"count": True}}}, "key"))
+    assert json.loads(classic["result"]["content"][0]["text"])["data"] == []

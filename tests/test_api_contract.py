@@ -7,7 +7,7 @@ import entry
 def test_every_advertised_raw_tool_argument_has_an_api_or_worker_handler():
     contract = json.loads((Path(__file__).parent / "fixtures" / "api-contract.json").read_text("utf8"))
     routes = {r["path"].removeprefix("/api/v2"): set(r["query_parameters"]) for r in contract["routes"]}
-    worker_only = {"role", "headcount_min", "headcount_max", "country_scope", "verbose", "group_by_company", "by_country"}
+    worker_only = {"role", "headcount_min", "headcount_max", "country_scope", "verbose", "group_by_company", "by_country", "sector"}
     for profile in ("classic", "hr"):
         for tool in entry._tools_for_profile(profile):
             endpoint = entry.TOOL_ENDPOINTS.get(tool["name"])

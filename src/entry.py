@@ -1180,6 +1180,43 @@ def _reorder_intent_first(tools):
 
 _reorder_intent_first(TOOLS)
 
+
+def _expose_api_filters(tools):
+    """Advertise API filters on the search tools of BOTH profiles (additive:
+    original arguments and payloads are unchanged). Without them a model on the
+    classic endpoint could not filter funding by investor or express "job in
+    Poland, HQ elsewhere" in one call."""
+    extra = {
+        "search_funding_signals": {
+            "investor_name": {"type": "string", "description": "Substring match on names of investors in the round."},
+            "investors": {"type": "string", "description": "Comma-separated exact investor names (OR), via the investor-to-round links."},
+            "investor_type": {"type": "string", "enum": ["pe", "vc"], "description": "A PE / VC investor took part in the round (participation, not ownership)."},
+            "date_basis": {"type": "string", "enum": ["announced", "occurred_at"], "description": "Date the window applies to; 'announced' uses the announcement date when recorded."},
+        },
+        "search_hiring_signals": {
+            "job_locations": {"type": "array", "items": {"type": "string"}, "description": "OR of job countries/regions and job metros (Dubai, Berlin, San Francisco, San Francisco Bay Area). Also matches posts stored without a country code by their location text."},
+            "exclude_company_countries": {"type": "string", "description": "Exclude company HQ countries only (e.g. jobs in Poland at non-Polish companies: job_locations=[\"Poland\"], exclude_company_countries=PL)."},
+            "exclude_staffing_agencies": {"type": "boolean", "description": "Drop companies whose industry is staffing/recruiting."},
+            "posted_min_days_ago": {"type": "integer", "minimum": 0, "maximum": 3650, "description": "Original posting at least this many days old (e.g. 31 = open for over a month)."},
+            "min_distinct_titles": {"type": "integer", "minimum": 2, "maximum": 100, "description": "Company has at least this many distinct job titles in the filtered set (multiple roles)."},
+            "max_company_postings": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Company has at most this many postings in the filtered set (first hires in a region)."},
+            "work_mode": {"type": "string", "enum": ["remote"], "description": "Remote stated in the job title or location."},
+            "sector": {"type": "string", "enum": sorted(SECTOR_INDUSTRIES), "description": "Industry preset (fmcg / cpg / consumer goods, food and beverage, beauty / cosmetics / personal care) mapped to stored industry labels."},
+            "funding_rounds": {"type": "string", "description": "Only companies with a matching round, e.g. 'Seed,Pre-Seed'. Joined before counting."},
+            "funding_date_from": {"type": "string", "description": "Matching round announced on/after this ISO date."},
+            "funding_investor_type": {"type": "string", "enum": ["pe", "vc"], "description": "Matching round had a PE / VC participant."},
+        },
+        "search_job_change_signals": {
+            "categories": CATEGORIES_PIPE_PROP,
+            "subcategories": SUBCATEGORIES_PROP,
+            "sector": {"type": "string", "enum": sorted(SECTOR_INDUSTRIES), "description": "Industry preset (e.g. fmcg) mapped to stored company industry labels. FMCG has no subcategory."},
+        },
+    }
+    for tool in tools:
+        for name, prop in extra.get(tool["name"], {}).items():
+            tool["inputSchema"]["properties"].setdefault(name, prop)
+    return tools
+
 ROLE_FAMILIES = {
     "sales": [
         "sales", "business development", "biz dev", "bizdev", "revenue",
@@ -1372,6 +1409,17 @@ def _prepare_tool_args(tool_args, tool_name: str = "", profile: str = "classic")
     verbose = _is_truthy(args.pop("verbose", not hr))
     group_by_company = _is_truthy(args.pop("group_by_company", hr and tool_name == "search_hiring_signals"))
     by_country = _is_truthy(args.pop("by_country", hr))
+    sector = args.pop("sector", None)
+    if sector and tool_name in ("search_hiring_signals", "search_job_change_signals"):
+        # Raises WorkflowError for an unknown preset (returned as a tool error).
+        sector_labels = _wf_sector_categories(sector)
+        args["categories"] = f"{args['categories']}|{sector_labels}" if args.get("categories") else sector_labels
+    if tool_name == "search_hiring_signals" and args.get("job_locations") is not None:
+        # The API takes job_locations as a JSON array, not a comma list.
+        places = args["job_locations"]
+        if isinstance(places, str) and not places.strip().startswith("["):
+            places = [p.strip() for p in places.split(",") if p.strip()]
+        args["job_locations"] = places if isinstance(places, str) else json.dumps(list(places))
     for k, v in list(args.items()):
         if isinstance(v, (list, tuple)):
             args[k] = ",".join(str(x) for x in v)
@@ -1697,6 +1745,98 @@ UNOBSERVED_REQUIREMENTS = {
 }
 
 
+# Sector presets -> the company industry labels actually stored (live labels,
+# 2026-09-11). FMCG has no subcategory; an FMCG CFO sits on "Personal Care
+# Product Manufacturing" or "Food and Beverage Manufacturing".
+FMCG_INDUSTRIES = [
+    "Food and Beverage Manufacturing", "Food & Beverages", "Food & Beverage", "Food and Beverage",
+    "Personal Care Product Manufacturing", "Consumer Goods", "Beverage Manufacturing", "Beverages",
+    "Food Production", "Dairy Product Manufacturing", "Dairy", "Cosmetics", "Beauty",
+    "Wine & Spirits", "Wineries", "Breweries", "Tobacco Manufacturing", "Tobacco",
+    "Wholesale Food and Beverage", "Wholesale Alcoholic Beverages", "Seafood Product Manufacturing",
+    "Sugar and Confectionery Product Manufacturing", "Trading in consumer goods",
+    "Retail Health and Personal Care Products", "Retail Groceries", "Grocery Retail", "Food and Beverage Retail",
+]
+SECTOR_INDUSTRIES = {
+    "fmcg": FMCG_INDUSTRIES, "cpg": FMCG_INDUSTRIES, "consumer goods": FMCG_INDUSTRIES,
+    "consumer packaged goods": FMCG_INDUSTRIES, "fast moving consumer goods": FMCG_INDUSTRIES,
+    "food and beverage": [i for i in FMCG_INDUSTRIES if "food" in i.lower() or "beverage" in i.lower() or "dairy" in i.lower()],
+    "beauty": ["Personal Care Product Manufacturing", "Cosmetics", "Beauty", "Retail Health and Personal Care Products"],
+}
+SECTOR_INDUSTRIES["cosmetics"] = SECTOR_INDUSTRIES["beauty"]
+SECTOR_INDUSTRIES["personal care"] = SECTOR_INDUSTRIES["beauty"]
+
+
+def _wf_sector_categories(sector):
+    """'fmcg' -> pipe-separated industry labels for the API `categories` filter."""
+    labels = SECTOR_INDUSTRIES.get(str(sector or "").strip().lower())
+    if not labels:
+        raise WorkflowError(f"Unknown sector '{sector}'. Known sectors: {', '.join(sorted(SECTOR_INDUSTRIES))}. For other sectors use subcategories (e.g. legal, cybersecurity, ai).")
+    return "|".join(labels)
+
+
+EARLY_ROUNDS = {"pre-seed", "pre_seed", "preseed", "seed", "series a", "series_a"}
+STAGE_SIZE_CAP = 500
+
+
+def _wf_stage_guard(args):
+    """Early-stage round asks default to companies of at most 500 people: round
+    labels on large companies (a 'Seed' on General Motors, Vanguard, Roblox) are
+    misattributed records. Explicit headcount arguments always win."""
+    rounds = [r.lower() for r in _wf_strings(args.get("funding_rounds"))]
+    if not rounds or any(r not in EARLY_ROUNDS for r in rounds):
+        return None
+    if args.get("headcount_max") is not None or args.get("headcount_min") is not None:
+        return None
+    return f"Companies above {STAGE_SIZE_CAP} employees are excluded for {'/'.join(_wf_strings(args.get('funding_rounds')))} asks: such round labels on large companies are misattributed records. Pass headcount_max to override."
+
+
+# A narrow title and the broader function to probe when it finds nothing in a place.
+TITLE_FAMILY = {"bdr": "sales", "sdr": "sales", "business development representative": "sales",
+                "sales development representative": "sales", "account executive": "sales", "ae": "sales",
+                "founding account executive": "sales", "gtm engineer": "gtm", "founding engineer": "engineers",
+                "cfo": "finance", "head of sales": "sales", "head of growth": "growth", "head of marketing": "marketing"}
+
+
+def _wf_broader_role(role):
+    text = str(role or "").strip().lower()
+    if not text or _resolve_role(text).get("positions") is None:
+        return None  # already a family (departments) or nothing to widen
+    return TITLE_FAMILY.get(text)
+
+
+async def _wf_place_breakdown(args, params, key, ledger):
+    """Free per-place counts for the requested role and, for a narrow title, its
+    broader function, so '0 BDR in Dubai' is reported next to '5 sales/BD
+    postings in Dubai' instead of silently looking like an empty market."""
+    places = _wf_strings(args.get("job_locations"))
+    if not places or len(places) > 6:
+        return None, []
+    broader = _wf_broader_role(args.get("role"))
+    role_keys = ("positions", "departments", "role_logic")
+    base = {k: v for k, v in params.items() if k not in ("job_locations",)}
+    broader_params = {k: v for k, v in base.items() if k not in role_keys}
+    if broader:
+        broader_params.update(_resolve_role(broader))
+    jobs = []
+    for place in places:
+        jobs.append(("role", place, {**base, "job_locations": json.dumps([place]), "count": True}))
+        if broader:
+            jobs.append(("broader", place, {**broader_params, "job_locations": json.dumps([place]), "count": True}))
+    jobs = jobs[: max(0, ledger["max_api_calls"] - ledger["api_calls"])]
+    results = await asyncio.gather(*(_wf_fetch("/signals/hiring", p, key, ledger) for _, _, p in jobs), return_exceptions=True)
+    by_place, hints = {}, []
+    for (kind, place, _), result in zip(jobs, results):
+        total = None if isinstance(result, BaseException) else result["pagination"]["totalCount"]
+        entry = by_place.setdefault(place, {})
+        entry["postings" if kind == "role" else f"broader_{broader}_postings"] = total
+    for place, entry in by_place.items():
+        wide = entry.get(f"broader_{broader}_postings") if broader else None
+        if entry.get("postings") == 0 and wide:
+            hints.append(f"No {args.get('role')}-titled postings in {place}, but {wide} {broader} postings: small companies there often use other titles for this role (e.g. 'Business Development Executive'). To list them call find_hiring_companies with role='{broader}' and job_locations=['{place}'] and present them as the same function under a different title.")
+    return by_place, hints
+
+
 def _wf_requirements(args):
     requested = _wf_strings(args.get("required_evidence"))
     unknown = [key for key in requested if key not in UNOBSERVED_REQUIREMENTS]
@@ -1718,12 +1858,18 @@ def _wf_hiring_params(args, funded=False):
         params.update(_resolve_role(args["role"]))
     if args.get("min_distinct_role_titles") is not None:
         params["min_distinct_titles"] = _wf_int(args, "min_distinct_role_titles", 2, 2, 100)
+    if args.get("max_postings_per_company") is not None:
+        params["max_company_postings"] = _wf_int(args, "max_postings_per_company", 3, 1, 100)
+    if args.get("sector"):
+        params["categories"] = _wf_sector_categories(args["sector"])
     if args.get("headcount_min") is not None or args.get("headcount_max") is not None:
         low = _wf_int(args, "headcount_min", 1, 1, 10000000)
         high = _wf_int(args, "headcount_max", 10000000, 1, 10000000)
         if low > high:
             raise WorkflowError("headcount_min cannot exceed headcount_max")
         params["team_size"] = f"{low}-{high}"
+    elif _wf_stage_guard(args):
+        params["team_size"] = f"1-{STAGE_SIZE_CAP}"
     params["exclude_staffing_agencies"] = args.get("exclude_staffing_agencies", True)
     if args.get("posted_within_days") is not None:
         params["dateFrom"] = _wf_day(now - timedelta(days=_wf_int(args, "posted_within_days", 30)))
@@ -1863,6 +2009,14 @@ async def _wf_hiring(args, key, ledger, funded=False):
             return {"status": "partial", "interpreted_query": params, "totals": {"postings": postings["pagination"]["totalCount"], "companies": None}, "errors": [str(companies)], "coverage": {"complete_for_indexed_filters": False, "count_only": True}}
         totals = {"postings": postings["pagination"]["totalCount"], "companies": companies["pagination"]["totalCount"]}
         result = {"status": "partial" if requirements else "complete", "interpreted_query": params, "totals": totals, "unverified_requirements": requirements, "coverage": {"complete_for_indexed_filters": True, "count_only": True}}
+        by_place, hints = await _wf_place_breakdown(args, params, key, ledger)
+        if by_place:
+            result["by_place"] = by_place
+        if hints:
+            result["hints"] = hints
+        guard = _wf_stage_guard(args)
+        if guard:
+            result["guards"] = [guard]
         if totals["postings"]:
             tool = "find_funded_hiring_companies" if funded else "find_hiring_companies"
             result["next_step"] = f"Count only: no company is named yet. If the user asked for companies, call {tool} again with the same arguments and count omitted; it returns company groups with posting URLs (1 credit per page)."
@@ -1895,7 +2049,9 @@ async def _wf_hiring(args, key, ledger, funded=False):
         page += 1
         if not has_more or ledger["api_calls"] >= ledger["max_api_calls"]:
             break
+    guard = _wf_stage_guard(args)
     return {"status": "partial" if requirements or has_more or start_page != 1 else "complete", "interpreted_query": params, "companies": _wf_company_results(rows, args), "unverified_requirements": requirements, "errors": errors,
+            **({"guards": [guard]} if guard else {}),
             "coverage": {"matching_postings": total, "rows_scanned": len(rows), "start_page": start_page, "complete_for_indexed_filters": not has_more and start_page == 1, "query_exhausted": not has_more, "complete_flag_scope": "this response, not pages accumulated by the caller", "next_page": page if has_more else None, "company_groups_span_pages": True, "funding_evidence_limit_per_posting": 5, "staffing_exclusion": "known staffing/recruitment industry labels only; unknown company types remain"}}
 
 
@@ -2119,6 +2275,8 @@ WF_HIRING_PROPS = {
     "description_keywords": _wf_prop("string", "Optional full-text job-description keywords. Returns a source excerpt around matches. Wording is evidence of an advertised claim, not independent confirmation."),
     "posted_within_days": _wf_prop("integer", "Posting recency, e.g. 30. Omit for all indexed open postings.", minimum=0, maximum=3650),
     "min_distinct_role_titles": _wf_prop("integer", "For multiple roles, set 2. Company must have this many distinct normalized titles in the SAME filtered cohort, before counts/paging. These are advertised titles, not verified seats.", minimum=2, maximum=100),
+    "max_postings_per_company": _wf_prop("integer", "Keep companies with at most this many postings in the SAME filtered cohort. With job_locations it finds companies making their first few hires in a region (e.g. 3 for 'first hires in Europe').", minimum=1, maximum=100),
+    "sector": _wf_prop("string", "Industry preset mapped to stored company industry labels: fmcg / cpg / consumer goods, food and beverage, beauty / cosmetics / personal care. Use subcategories for tech sectors (legal, cybersecurity, ai).", enum=sorted(SECTOR_INDUSTRIES)),
     "posted_from": _wf_prop("string", "Explicit ISO posting start date; overrides posted_within_days."),
     "posted_to": _wf_prop("string", "Explicit ISO posting end date; combines with minimum posting age. Open-only filtering still applies."),
     "posting_age_days_min": _wf_prop("integer", "At least this many days since original posting, e.g. 31 for over a month. Missing original dates excluded. Does not prove continuously unfilled.", minimum=0, maximum=3650),
@@ -2210,6 +2368,26 @@ async def _run_hr_workflow(name, args, api_key):
 
 
 HR_INSTRUCTIONS = """Signalbase MCP v2 for HR and recruiting teams.
+
+What a good answer looks like: a shortlist of named companies, each with the
+matching role(s), posting/source links, and one line on why it is a prospect
+(size, funding, role, geography). Counts alone are not an answer. When the exact
+requirement is not in the data (HQ city, founder nationality, office presence,
+budget), say so in one line and still deliver the closest useful leads under a
+clear label ("already hiring in the Bay Area; HQ city not verified"). Never relax
+a requirement silently. Flag questionable matches instead of presenting them as
+clean: a headcount that contradicts the company description, a Seed/Series A
+label on a large company, a recruiting platform posting for clients.
+- If a narrow role (bdr, sdr, account executive) finds nothing in a requested
+  place, read by_place and hints: small companies abroad often title the same job
+  "Business Development Executive/Manager" or "Sales Specialist". List those as
+  "same function, different title".
+- Early-stage round asks (Seed, Pre-Seed, Series A) exclude companies above 500
+  people by default (see guards); such labels on large companies are misattributed.
+- sector=fmcg (or cpg, consumer goods, food and beverage, beauty) maps to the
+  stored industry labels; FMCG has no subcategory.
+- "First hires in <region>": job_locations=[region] with max_postings_per_company=3.
+
 Prefer these complete workflows to manual multi-call joins:
 - find_hiring_companies: actual open roles; explicit company_countries (HQ) and
   job_locations (job location). Never silently replace one geography with the other.
@@ -2344,6 +2522,9 @@ def _hiring_outlook_prompt(args):
     )}}]}
 
 
+_expose_api_filters(TOOLS)
+
+
 def _tools_for_profile(profile):
     if profile != "hr":
         return TOOLS
@@ -2461,7 +2642,10 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
             )
         else:
             endpoint = TOOL_ENDPOINTS[tool_name]
-            api_params, verbose, opts = _prepare_tool_args(tool_args, tool_name, profile)
+            try:
+                api_params, verbose, opts = _prepare_tool_args(tool_args, tool_name, profile)
+            except WorkflowError as error:
+                return {"jsonrpc": "2.0", "id": req_id, "result": _error_result(str(error))}
             api_response = await _call_api(endpoint, api_params, api_key)
             if opts["by_country"]:
                 api_response = await _with_country_breakdown(endpoint, api_params, api_key, api_response)
@@ -2469,6 +2653,11 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
             if isinstance(api_response, dict) and api_response.get("error") is True:
                 result = _error_result(_format_api_error(api_response))
             else:
+                if (not verbose and api_params.get("count") in (True, "true") and isinstance(api_response, dict)
+                        and api_response.get("data") == []):
+                    # Compact count: an empty `data` list reads as "no results" to a model.
+                    api_response = {k: v for k, v in api_response.items() if k != "data"}
+                    api_response["countOnly"] = True
                 result = _success_result(api_response, verbose=verbose, group_by_company=opts["group_by_company"])
 
     elif method == "ping":
