@@ -77,3 +77,22 @@ def test_grouping_does_not_require_trimming_or_remove_rows():
 def test_country_breakdowns_are_explicit_on_every_tool():
     for tool in entry.TOOLS:
         assert tool["inputSchema"]["properties"]["by_country"]["default"] is False
+
+
+def test_classic_json_rpc_keeps_legacy_string_coercion(monkeypatch):
+    calls = []
+
+    async def api(endpoint, params, key):
+        calls.append((endpoint, params, key))
+        return {"success": True, "data": [], "pagination": {"totalCount": 0}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = asyncio.run(entry._handle_jsonrpc({
+        "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": {"name": "search_hiring_signals", "arguments": {
+            "verbose": "false", "count": "true", "limit": "50", "headcount_max": "9",
+        }},
+    }, "test-key", "classic"))
+    assert not result["result"].get("isError")
+    [(_, params, _)] = calls
+    assert params == {"count": "true", "limit": "50", "team_size": "1-9"}

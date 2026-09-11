@@ -1260,7 +1260,7 @@ ROLE_TITLES = [
 
 
 def _resolve_role(role: str) -> dict:
-    """'bdr' → {'departments': 'sales'}; 'head of sales' → {'positions': 'head of sales'}."""
+    """'bdr' → {'positions': 'bdr'}; 'engineers' → {'departments': 'engineering'}."""
     text = (role or "").strip().lower()
     if not text:
         return {}
@@ -2793,13 +2793,14 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         else:
             endpoint = TOOL_ENDPOINTS[tool_name]
             try:
-                descriptor = next(t for t in _tools_for_profile(profile) if t["name"] == tool_name)
-                _validate_tool_arguments(
-                    descriptor,
-                    tool_args,
-                    allow_unknown=profile != "hr",
-                    allow_string_lists=True,
-                )
+                if profile == "hr":
+                    descriptor = next(t for t in _tools_for_profile(profile) if t["name"] == tool_name)
+                    _validate_tool_arguments(
+                        descriptor,
+                        tool_args,
+                        allow_unknown=False,
+                        allow_string_lists=True,
+                    )
                 api_params, verbose, opts = _prepare_tool_args(tool_args, tool_name, profile)
             except WorkflowError as error:
                 invalid = _error_result(str(error))
