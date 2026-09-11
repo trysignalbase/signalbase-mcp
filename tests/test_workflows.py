@@ -511,6 +511,21 @@ def test_titles_and_job_locations_do_not_infer_first_hire_or_office(monkeypatch)
     assert {item["requirement"] for item in company["unverified_requirements"]} == {"first_hire", "office_opening"}
 
 
+def test_explicit_office_location_wording_is_evidence_of_presence_only(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope([{
+            "id": "j1", "companyId": "c1", "companyName": "DevBrother", "companyWebsite": "devbrother.com",
+            "title": "Engineer", "location": "Offices in Ukraine (Kyiv) and Poland (Wroclaw)",
+            "jobUrl": "https://example.test/job/1",
+        }])
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    [company] = call("find_hiring_companies", {"required_evidence": ["office_presence", "office_opening"]})["companies"]
+    criteria = {item["requirement"]: item for item in company["criteria"]}
+    assert criteria["office_presence"]["source_field"] == "job_location"
+    assert [item["requirement"] for item in company["unverified_requirements"]] == ["office_opening"]
+
+
 def test_caller_defined_startup_and_growth_rules_map_to_api():
     params = entry._wf_hiring_params({
         "headcount_max": 200,

@@ -1899,6 +1899,21 @@ def _wf_source_claims(row, requested):
                 "source_url": row.get("jobUrl"),
                 "qualification": "Explicit employer wording in the indexed posting; not independently verified.",
             }
+    location = html.unescape(row.get("location") or "")
+    if (
+        "office_presence" in requested
+        and "office_presence" not in claims
+        and re.search(r"\boffices?\s+(?:in|located in)\b", location, re.I)
+    ):
+        claims["office_presence"] = {
+            "requirement": "office_presence",
+            "status": "supported_source_text",
+            "quote": location[:500],
+            "source_field": "job_location",
+            "posting_id": row.get("id"),
+            "source_url": row.get("jobUrl"),
+            "qualification": "The posting's source-derived location explicitly says office(s); this supports presence, not a new office opening.",
+        }
     return claims
 
 
