@@ -259,3 +259,34 @@ def test_investor_activity_uses_existing_round_edges_and_reports_paging(monkeypa
     result = call("research_investor_activity", {"investor_headquarters": "Toronto", "company_countries": ["US"], "max_pages": 1, "as_of": "2026-09-10"})
     assert calls[1][1]["investors"] == "Toronto VC" and calls[1][1]["amount_min"] == 10000000
     assert result["status"] == "partial" and result["coverage"]["next_funding_page"] == 2
+
+
+def test_headquarters_match_is_not_reported_as_round_participation(monkeypatch):
+    async def api(endpoint, params, key):
+        if endpoint == "/signals/investors":
+            return envelope([{"name": "Impression Ventures", "headquarters": "Toronto"}, {"name": "Framework Venture Partners"}, {"name": "Smith, Jones & Co"}])
+        return envelope([
+            {"companyName": "401GO", "companyWebsite": "401go.com", "roundType": "Series B", "amount": 33000000, "sources": [{"url": "https://news/401go"}],
+             "investors": [{"name": "impression ventures", "isLead": True}, {"name": "Centana"}]},
+        ])
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("research_investor_activity", {"investor_headquarters": "Toronto", "as_of": "2026-09-10"})
+    [match] = result["investors_with_matching_rounds"]
+    assert match["investor"] == "Impression Ventures"
+    assert match["matching_rounds"][0]["company"] == "401GO" and match["matching_rounds"][0]["lead"] is True
+    assert match["matching_rounds"][0]["sources"] == ["https://news/401go"]
+    assert result["investors_without_matching_rounds"] == ["Framework Venture Partners"]
+    assert result["investors_not_checked"] == ["Smith, Jones & Co"]
+    assert result["summary"].startswith("1 of 2 checked investors")
+    assert result["coverage"]["investors_with_matching_rounds"] == 1
+
+
+def test_positive_count_names_the_follow_up_call(monkeypatch):
+    async def api(endpoint, params, key):
+        return envelope(total=3, paid=False)
+    monkeypatch.setattr(entry, "_call_api", api)
+    assert "find_funded_hiring_companies again" in call("find_funded_hiring_companies", {"count": True})["next_step"]
+    async def empty(endpoint, params, key):
+        return envelope(total=0, paid=False)
+    monkeypatch.setattr(entry, "_call_api", empty)
+    assert "next_step" not in call("find_hiring_companies", {"count": True})

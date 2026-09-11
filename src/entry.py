@@ -1859,7 +1859,12 @@ async def _wf_hiring(args, key, ledger, funded=False):
             if not isinstance(companies, WorkflowError):
                 raise companies
             return {"status": "partial", "interpreted_query": params, "totals": {"postings": postings["pagination"]["totalCount"], "companies": None}, "errors": [str(companies)], "coverage": {"complete_for_indexed_filters": False, "count_only": True}}
-        return {"status": "partial" if requirements else "complete", "interpreted_query": params, "totals": {"postings": postings["pagination"]["totalCount"], "companies": companies["pagination"]["totalCount"]}, "unverified_requirements": requirements, "coverage": {"complete_for_indexed_filters": True, "count_only": True}}
+        totals = {"postings": postings["pagination"]["totalCount"], "companies": companies["pagination"]["totalCount"]}
+        result = {"status": "partial" if requirements else "complete", "interpreted_query": params, "totals": totals, "unverified_requirements": requirements, "coverage": {"complete_for_indexed_filters": True, "count_only": True}}
+        if totals["postings"]:
+            tool = "find_funded_hiring_companies" if funded else "find_hiring_companies"
+            result["next_step"] = f"Count only: no company is named yet. If the user asked for companies, call {tool} again with the same arguments and count omitted; it returns company groups with posting URLs (1 credit per page)."
+        return result
     page = _wf_int(args, "page", 1, 1, 100000)
     start_page = page
     pages = _wf_int(args, "max_pages", 2, 1, 5)
@@ -2009,10 +2014,10 @@ async def _wf_investors(args, key, ledger):
     investors = await _wf_fetch("/signals/investors", params, key, ledger)
     names = list(dict.fromkeys(r.get("name") for r in investors.get("data", []) if r.get("name")))
     if not names:
-        return {"status": "complete", "investors": [], "rounds": [], "coverage": {"investors_checked": 0, "no_observed_matches": True}}
+        return {"status": "complete", "investors_with_matching_rounds": [], "investors_without_matching_rounds": [], "rounds": [], "coverage": {"investors_checked": 0, "no_observed_matches": True}}
     ordinary_names = [name for name in names if "," not in name]
     if not ordinary_names:
-        return {"status": "partial", "investors": investors.get("data", []), "rounds": [], "coverage": {"reason": "Investor names contain commas; exact-name list lookup cannot represent them without ambiguity."}}
+        return {"status": "partial", "investors_with_matching_rounds": [], "investors_without_matching_rounds": [], "investors_not_checked": names, "rounds": [], "coverage": {"reason": "Investor names contain commas; exact-name list lookup cannot represent them without ambiguity."}}
     funding_args = {"filter_version": 2, "investors": ",".join(ordinary_names), "dateFrom": _wf_day(now - timedelta(days=_wf_int(args, "funding_within_days", 365))), "amount_min": _wf_int(args, "round_amount_min", 10000000, 0, 1000000000000), "currency": "USD", "countries": ",".join(_wf_strings(args.get("company_countries")) or ["US"]), "limit": 50, "sort_by": "amount", "sort_order": "desc"}
     funding_args["date_basis"] = "announced"
     funding_args["dateTo"] = _wf_day(now)
@@ -2029,8 +2034,45 @@ async def _wf_investors(args, key, ledger):
         page += 1
         if not more or ledger["api_calls"] >= ledger["max_api_calls"]:
             break
-    return {"status": "partial" if more or errors or investors.get("pagination", {}).get("hasNextPage") or len(ordinary_names) != len(names) else "complete", "investors": investors.get("data"), "rounds": _trim_response({"data": rounds})["data"], "interpreted_query": funding_args, "errors": errors,
-            "coverage": {"investors_checked": len(ordinary_names), "total_matching_investors": investors.get("pagination", {}).get("totalCount"), "next_investor_page": params["page"] + 1 if investors.get("pagination", {}).get("hasNextPage") else None, "next_funding_page": page if more else None, "evidence_meaning": "Indexed participation in a funding round; not evidence of current ownership. No matching rounds is a coverage result, not proof of no investments."}}
+    checked = [p for p in investors.get("data") or [] if p.get("name") in ordinary_names]
+    matched, unmatched = _wf_investor_matches(checked, rounds)
+    return {"status": "partial" if more or errors or investors.get("pagination", {}).get("hasNextPage") or len(ordinary_names) != len(names) else "complete",
+            "investors_with_matching_rounds": matched,
+            "investors_without_matching_rounds": unmatched,
+            "investors_not_checked": [n for n in names if n not in ordinary_names],
+            "summary": f"{len(matched)} of {len(ordinary_names)} checked investors headquartered in {params['headquarters']} appear in a matching round; the rest had none in the rounds returned."
+            + (" More rounds exist on next_funding_page." if more else ""),
+            "rounds": _trim_response({"data": rounds})["data"], "interpreted_query": funding_args, "errors": errors,
+            "coverage": {"investors_checked": len(ordinary_names), "investors_matching_headquarters": investors.get("pagination", {}).get("totalCount"), "investors_with_matching_rounds": len(matched), "next_investor_page": params["page"] + 1 if investors.get("pagination", {}).get("hasNextPage") else None, "next_funding_page": page if more else None, "evidence_meaning": "Indexed participation in a funding round; not evidence of current ownership. No matching rounds is a coverage result, not proof of no investments."}}
+
+
+def _wf_investor_matches(profiles, rounds):
+    """Split the HQ-matched investors into those that appear in a returned round
+    (with those rounds) and those that do not, so a headquarters match is never
+    read as round participation."""
+    by_name = {}
+    for r in rounds:
+        for inv in r.get("investors") or []:
+            name = (inv.get("name") if isinstance(inv, dict) else str(inv or "")).strip().lower()
+            if name:
+                by_name.setdefault(name, []).append((r, inv if isinstance(inv, dict) else {}))
+    matched, unmatched = [], []
+    for profile in profiles:
+        name = profile.get("name") or ""
+        hits = by_name.get(name.strip().lower(), [])
+        if not hits:
+            unmatched.append(name)
+            continue
+        matched.append({
+            "investor": name, "headquarters": profile.get("headquarters"), "type": profile.get("type"), "website": profile.get("website"),
+            "matching_rounds": [{
+                "company": r.get("companyName"), "company_domain": _wf_domain(r), "company_hq": r.get("companyCountry"),
+                "round": r.get("roundType"), "amount": r.get("amount"), "currency": r.get("currency"),
+                "announced": r.get("announcedDate"), "occurred_at": r.get("occurredAt"), "lead": inv.get("isLead"),
+                "sources": [s.get("url") if isinstance(s, dict) else s for s in (r.get("sources") or [])[:3]],
+            } for r, inv in hits],
+        })
+    return matched, unmatched
 
 
 def _wf_prop(kind, description, **extra):
