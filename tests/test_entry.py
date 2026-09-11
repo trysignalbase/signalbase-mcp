@@ -587,3 +587,30 @@ def test_group_by_company_via_tool_call(monkeypatch):
     resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "US", "group_by_company": True}})
     payload = json.loads(resp["result"]["content"][0]["text"])
     assert payload["companiesTotal"] == 1 and len(payload["data"]) == 1
+
+
+def test_batch_requests_get_one_response_per_request_and_notifications_none():
+    body = [
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        "not an object",
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    ]
+    responses, status = asyncio.run(entry._handle_body(body, "key", "hr"))
+    assert status == 200
+    assert [r.get("id") for r in responses] == [1, None, 2]
+    assert responses[1]["error"]["code"] == -32600
+    assert any(t["name"] == "find_hiring_companies" for t in responses[2]["result"]["tools"])
+
+
+def test_empty_batch_and_non_object_body_are_invalid_requests():
+    for body in ([], "text", 3):
+        response, status = asyncio.run(entry._handle_body(body, "key"))
+        assert status == 400 and response["error"]["code"] == -32600
+    only_notifications, status = asyncio.run(entry._handle_body([{"jsonrpc": "2.0", "method": "notifications/initialized"}], "key"))
+    assert only_notifications is None and status == 200
+
+
+def test_cors_allows_mcp_protocol_headers():
+    allowed = {h.strip().lower() for h in entry.CORS_HEADERS["Access-Control-Allow-Headers"].split(",")}
+    assert {"mcp-protocol-version", "mcp-session-id", "authorization", "content-type"} <= allowed

@@ -122,7 +122,9 @@ TRIM_META = {"trimmed": True, "hint": "pass verbose=true for full text"}
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    # Browser MCP clients (e.g. the MCP Inspector) send the protocol/session
+    # headers on every request; without them the preflight fails.
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, Mcp-Protocol-Version, Mcp-Session-Id",
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -2487,6 +2489,30 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
     }
 
 
+def _invalid_request(message="Invalid Request"):
+    return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": message}}
+
+
+async def _handle_body(body, api_key: str, profile: str = "classic"):
+    """Dispatch a parsed JSON-RPC body: one request object or a batch array.
+    Returns (response, status); response None means notifications only (204)."""
+    if isinstance(body, list):
+        if not body:
+            return _invalid_request("Invalid Request: empty batch"), 400
+        responses = []
+        for item in body:
+            if not isinstance(item, dict):
+                responses.append(_invalid_request())
+                continue
+            response = await _handle_jsonrpc(item, api_key, profile)
+            if response is not None:
+                responses.append(response)
+        return (responses or None), 200
+    if not isinstance(body, dict):
+        return _invalid_request(), 400
+    return await _handle_jsonrpc(body, api_key, profile), 200
+
+
 # ──────────────────────────────────────────────────────────────
 # Cloudflare Workers entry point
 # ──────────────────────────────────────────────────────────────
@@ -2525,7 +2551,9 @@ async def on_fetch(request, env):
         )
 
     profile = "hr" if urlsplit(str(request.url)).path.rstrip("/") == "/v2" else "classic"
-    response = await _handle_jsonrpc(body, api_key, profile)
+    response, status = await _handle_body(body, api_key, profile)
+    if status != 200:
+        return _json_response(response, status)
 
     if response is None:
         return Response.new("", to_js(
