@@ -43,6 +43,7 @@ def test_funded_hiring_is_one_joined_query_and_keeps_evidence(monkeypatch):
     assert params["dateTo"] == "2026-08-10"
     assert params["funding_date_from"] == "2026-06-12"
     assert params["include_expired"] is False
+    assert params["open_as_of"] == "2026-09-10T12:00:00+00:00"
     assert len(result["companies"]) == 1 and len(result["companies"][0]["postings"]) == 2
     assert result["companies"][0]["funding"] == [funding]
     assert result["companies"][0]["domain"] == "a.com"
@@ -76,14 +77,14 @@ def test_later_or_capped_pages_are_not_claimed_complete(monkeypatch):
 def test_later_page_failure_keeps_paid_results_and_continuation(monkeypatch):
     async def api(endpoint, params, key):
         if params["page"] == 2:
-            return {"error": True, "status": 503, "body": {"error": "Unavailable"}}
+            return {"error": True, "status": 503, "body": {"error": "Unavailable", "meta": {"creditsUsed": 1}}}
         return envelope([{"id": "j1", "companyId": "c1", "companyName": "A"}], total=500, more=True)
     monkeypatch.setattr(entry, "_call_api", api)
     result = call("find_hiring_companies", {"max_pages": 2})
     assert result["status"] == "partial"
     assert result["companies"][0]["company"] == "A"
     assert result["coverage"]["next_page"] == 2
-    assert result["usage"]["credits_used"] == 1
+    assert result["usage"]["credits_used"] == 2
     assert result["errors"]
 
 
@@ -157,7 +158,11 @@ def test_outlook_postings_check_runs_through_today(monkeypatch):
     result = call("find_hiring_outlook", {"funding_rounds": ["Seed"], "as_of": "2026-09-10"})
     history = [p for e, p in calls if e == "/signals/hiring" and p.get("include_expired") is True]
     assert history[0]["dateFrom"] == "2026-06-03" and history[0]["dateTo"] == "2026-09-10"
+    current = [p for e, p in calls if e == "/signals/hiring" and p.get("include_expired") is False]
+    assert current[0]["open_as_of"] == "2026-09-10T00:00:00+00:00"
+    assert current[0]["dateTo"] == "2026-09-10"
     assert result["candidates"][0]["quiet_evidence"]["postings_from_lookback_start_to_today"] == 0
+    assert "not a historical index snapshot" in result["coverage"]["as_of_semantics"]
 
 
 def test_count_string_cannot_accidentally_spend_credits(monkeypatch):
@@ -166,6 +171,24 @@ def test_count_string_cannot_accidentally_spend_credits(monkeypatch):
     monkeypatch.setattr(entry, "_call_api", api)
     result = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "find_hiring_companies", "arguments": {"count": "true"}}}, "key", "hr"))
     assert result["result"]["isError"]
+
+
+def test_array_item_enums_are_validated_before_paid_calls(monkeypatch):
+    calls = []
+
+    async def api(*args):
+        calls.append(args)
+        return envelope([{"name": "Should Not Be Fetched"}])
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {
+        "name": "research_investor_activity",
+        "arguments": {"investor_headquarters": "Toronto", "required_evidence": ["typo"]},
+    }}, "key", "hr"))
+    assert response["result"]["isError"]
+    assert "required_evidence" in response["result"]["content"][0]["text"]
+    assert response["result"]["_meta"]["usage"] == {"api_calls": 0, "credits_used": 0}
+    assert calls == []
 
 
 def test_gtm_engineer_does_not_collapse_into_sales_department():
@@ -261,20 +284,46 @@ def test_investor_activity_uses_existing_round_edges_and_reports_paging(monkeypa
     assert result["status"] == "partial" and result["coverage"]["next_funding_page"] == 2
 
 
+def test_investor_activity_rejects_rounds_with_conflicting_window_dates(monkeypatch):
+    async def api(endpoint, params, key):
+        if endpoint == "/signals/investors":
+            return envelope([{"name": "Example Ventures", "headquarters": "Toronto"}])
+        return envelope([{
+            "companyName": "Conflicted", "companyWebsite": "conflicted.example",
+            "roundType": "Seed", "announcedDate": "2026-08-13",
+            "occurredAt": "2024-10-02T05:41:23Z",
+            "investors": [{"name": "Example Ventures", "isLead": False}],
+            "sources": [{"url": "https://news/conflict", "publishedAt": "2024-10-02"}],
+        }])
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("research_investor_activity", {
+        "investor_headquarters": "Toronto", "funding_within_days": 365,
+        "as_of": "2026-09-10",
+    })
+    assert result["investors_with_matching_rounds"] == []
+    assert result["rejected_rounds"][0]["company"] == "Conflicted"
+    assert "do not all support" in result["rejected_rounds"][0]["reason"]
+
+
 def test_headquarters_match_is_not_reported_as_round_participation(monkeypatch):
     async def api(endpoint, params, key):
         if endpoint == "/signals/investors":
             return envelope([{"name": "Impression Ventures", "headquarters": "Toronto"}, {"name": "Framework Venture Partners"}, {"name": "Smith, Jones & Co"}])
         return envelope([
-            {"companyName": "401GO", "companyWebsite": "401go.com", "roundType": "Series B", "amount": 33000000, "sources": [{"url": "https://news/401go"}],
+            {"companyName": "401GO", "companyWebsite": "401go.com", "roundType": "Series B", "amount": 33000000, "sources": [{"url": "https://news/401go", "title": "401GO Raises $33M Series B Led by Centana Growth Partners to Drive Growth", "publishedAt": "2025-12-09"}],
              "investors": [{"name": "impression ventures", "isLead": True}, {"name": "Centana"}]},
         ])
     monkeypatch.setattr(entry, "_call_api", api)
     result = call("research_investor_activity", {"investor_headquarters": "Toronto", "as_of": "2026-09-10"})
     [match] = result["investors_with_matching_rounds"]
     assert match["investor"] == "Impression Ventures"
-    assert match["matching_rounds"][0]["company"] == "401GO" and match["matching_rounds"][0]["lead"] is True
-    assert match["matching_rounds"][0]["sources"] == ["https://news/401go"]
+    round_evidence = match["matching_rounds"][0]
+    assert round_evidence["company"] == "401GO" and round_evidence["lead"] is None
+    assert round_evidence["stored_lead_flag"] is True
+    assert round_evidence["lead_status"] == "contradicted_by_source_title"
+    assert round_evidence["source_named_lead"] == "Centana Growth Partners"
+    assert round_evidence["sources"][0]["url"] == "https://news/401go"
     assert result["investors_without_matching_rounds"] == ["Framework Venture Partners"]
     assert result["investors_not_checked"] == ["Smith, Jones & Co"]
     assert result["summary"].startswith("1 of 2 checked investors")
@@ -342,6 +391,19 @@ def test_outlook_trigger_sources_are_capped_urls():
     assert trigger["sources"] == ["https://s/0", "https://s/1", "https://s/2"]
 
 
+def test_old_conflicting_funding_date_cannot_become_a_recent_trigger():
+    now = entry._wf_date("2026-09-10")
+    conflict = {
+        "companyName": "Liquid AI", "companyWebsite": "liquid.ai", "roundType": "seed",
+        "announcedDate": "2026-08-13", "occurredAt": "2024-10-02T05:41:23Z",
+    }
+    assert entry._wf_trigger(conflict, "funding", now, 90) is None
+    supported = {**conflict, "occurredAt": "2026-08-13T05:41:23Z"}
+    trigger = entry._wf_trigger(supported, "funding", now, 90)
+    assert trigger["funding"]["source_identity_status"] == "not_verified_by_index"
+    assert trigger["headcount_evidence"]["verified_exact"] is False
+
+
 def test_narrow_role_reports_same_function_postings_per_place(monkeypatch):
     calls = []
     async def api(endpoint, params, key):
@@ -359,15 +421,30 @@ def test_narrow_role_reports_same_function_postings_per_place(monkeypatch):
     assert all(p["team_size"] == "1-9" for p in calls)
 
 
-def test_seed_asks_exclude_large_companies_unless_headcount_given(monkeypatch):
+def test_seed_asks_do_not_use_arbitrary_headcount_caps(monkeypatch):
     params = entry._wf_hiring_params({"funding_rounds": ["Seed"], "as_of": "2026-09-10"})
-    assert params["team_size"] == "1-500"
+    assert "team_size" not in params
     assert entry._wf_hiring_params({"funding_rounds": ["Seed"], "headcount_max": 2000, "as_of": "2026-09-10"})["team_size"] == "1-2000"
     assert "team_size" not in entry._wf_hiring_params({"funding_rounds": ["Series C"], "as_of": "2026-09-10"})
     async def api(endpoint, params, key):
-        return envelope(total=3, paid=False)
+        if params.get("count"):
+            return envelope(total=3, paid=False)
+        return envelope([{
+            "id": "j1", "companyId": "c1", "companyName": "A", "companyWebsite": "a.com",
+            "companyEmployeeCount": 900, "title": "Engineer", "jobUrl": "https://a/jobs/1",
+            "matchedFunding": [{
+                "signalId": "f1", "roundType": "Seed", "verificationStatus": "unverified",
+                "dateQualification": "all_stored_event_dates_within_requested_window",
+                "sources": [{"url": "https://news/a", "title": "A raises seed", "publishedAt": "2026-09-01"}],
+            }],
+        }])
     monkeypatch.setattr(entry, "_call_api", api)
-    assert "misattributed" in call("find_funded_hiring_companies", {"funding_rounds": ["Seed"], "count": True})["guards"][0]
+    result = call("find_funded_hiring_companies", {"funding_rounds": ["Seed"]})
+    assert result["companies"][0]["headcount"] == 900
+    assert result["companies"][0]["qualification"] == "partial_pending_funding_source_verification"
+    review = result["companies"][0]["funding_evidence_review"][0]
+    assert review["source_identity_status"] == "not_verified_by_index"
+    assert review["sources"][0]["url"] == "https://news/a"
 
 
 def test_sector_preset_maps_to_industry_labels_on_workflows_and_search_tools(monkeypatch):
@@ -376,7 +453,7 @@ def test_sector_preset_maps_to_industry_labels_on_workflows_and_search_tools(mon
     api_params, _, _ = entry._prepare_tool_args({"positions": "cfo", "sector": "fmcg"}, "search_job_change_signals", "hr")
     assert "Food and Beverage Manufacturing" in api_params["categories"].split("|") and "sector" not in api_params
     response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "search_job_change_signals", "arguments": {"sector": "mining"}}}, "key", "hr"))
-    assert response["result"]["isError"] and "Known sectors" in response["result"]["content"][0]["text"]
+    assert response["result"]["isError"] and "expected one of" in response["result"]["content"][0]["text"]
 
 
 def test_search_tool_sends_job_locations_as_json_and_compact_counts_drop_empty_data(monkeypatch):

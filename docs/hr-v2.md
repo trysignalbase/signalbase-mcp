@@ -34,14 +34,19 @@ countries are specified separately with `company_countries`. The HQ-only
 
 `required_evidence` makes unsupported claims explicit. Founder origin, office presence,
 founder-led sales, a first actual hire, budget, current ownership, current funding stage
-and continuously unfilled jobs are not inferred from proxies. Stored company headcounts,
-round labels and job associations can be wrong; source URLs and data-quality limits
+and continuously unfilled jobs are not inferred from proxies. Stored company headcounts
+are labelled stored/estimated rather than verified exact. Round labels and job
+associations can be wrong; source URLs and data-quality limits
 are returned without rewriting those records.
 
-Funding recency uses announced date when available, then occurredAt. Both original
-fields are preserved so disagreements remain visible. A past Seed round does not
-establish a company's current stage. Staffing exclusions use known industry labels;
-remote filtering looks for explicit wording in job titles/locations.
+Every stored funding event date must support the requested recency window; a recent
+announcedDate cannot promote an old occurredAt. Both fields, stored verification,
+source titles/links/dates and identity uncertainty are returned. A past Seed round
+does not establish current stage. No company blacklist or arbitrary headcount cap is
+used as evidence validation. Investor workflow lead claims remain unverified unless
+source titles support them. Staffing exclusions use known industry labels; remote
+filtering requires title/location work-arrangement wording, rejects occupations such
+as “remote sensing”, and checks description text for negative remote statements.
 
 ## Connect
 
@@ -98,6 +103,8 @@ rates, and does not infer a particular role from an any-hire benchmark.
 - Hiring searches request open postings. An explicit historical end date or past
   calendar preset retains history. `include_expired=true` includes history;
   explicit `false` filters to open postings even with dates.
+- `as_of` anchors relative windows and the posting-freshness test. It is not a
+  historical index snapshot; later-indexed backdated rows can change a replay.
 - Compact responses keep `data` rows. Hiring also adds `companies`, grouped from
   the current page. `verbose=true` returns the full payload; `group_by_company=false`
   suppresses the additional groups.
@@ -111,7 +118,7 @@ rates, and does not infer a particular role from an any-hire benchmark.
 - Country errors are explicit on v2. `NORTH_AMERICA` means the region; `NA` means
   Namibia. The classic endpoint continues accepting legacy country literals.
 
-“Open” is a freshness estimate: `validThrough` has not passed, or a posting without
+“Open” is an indexed freshness estimate: `validThrough` has not passed, or a posting without
 an expiry is at most 60 days old. It does not confirm that the employer is still
 accepting applications. Use posting/source links as evidence.
 

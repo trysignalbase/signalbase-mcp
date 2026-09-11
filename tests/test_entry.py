@@ -436,6 +436,9 @@ def test_resolve_role_families_and_titles():
     assert entry._resolve_role("head of sales") == {"positions": "head of sales"}
     assert entry._resolve_role("cto") == {"positions": "cto"}
     assert entry._resolve_role("underwater basket weaver") == {"positions": "underwater basket weaver"}
+    assert entry._resolve_role("director of sales") == {"positions": "director of sales"}
+    assert entry._resolve_role("senior software engineer") == {"positions": "senior software engineer"}
+    assert entry._resolve_role("data engineer") == {"positions": "data engineer"}
     assert entry._resolve_role("bdr, cto") == {"positions": "bdr,cto"}
     assert entry._resolve_role("") == {}
 
@@ -452,6 +455,12 @@ def test_resolve_intent_args_hiring():
     assert out["departments"] == "marketing" and out["positions"] == "bdr"
     out = entry._resolve_intent_args("search_hiring_signals", {"role": "sales", "departments": "marketing"})
     assert out["departments"] == "marketing,sales"
+    out = entry._resolve_intent_args("search_hiring_signals", {
+        "role": "bdr or engineers", "role_logic": "or", "departments": "marketing",
+    })
+    assert out["role_logic"] == "or"
+    assert out["positions"] == "bdr"
+    assert out["departments"] == "marketing,engineering"
 
 
 def test_resolve_intent_args_funding_and_passthrough():
@@ -538,6 +547,28 @@ def test_mixed_role_alternatives_stay_or():
     assert "role_logic" not in entry._resolve_role("engineers")
 
 
+def test_full_hr_argument_path_preserves_explicit_or_with_inferred_filters(monkeypatch):
+    calls = []
+
+    async def api(endpoint, params, key):
+        calls.append((endpoint, params))
+        return {"success": True, "data": [], "pagination": {"totalCount": 7}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {
+        "name": "search_hiring_signals", "arguments": {
+            "role": "bdr or engineers", "role_logic": "or", "departments": "marketing",
+            "headcount_max": 9, "count": True, "by_country": False,
+        },
+    }}, "key", "hr"))
+    assert not response["result"].get("isError")
+    [(_, params)] = calls
+    assert params["role_logic"] == "or"
+    assert params["positions"] == "bdr"
+    assert params["departments"] == "marketing,engineering"
+    assert params["team_size"] == "1-9"
+
+
 def test_no_region_named_na_is_advertised():
     blob = json.dumps(entry.TOOLS) + entry.INSTRUCTIONS
     assert "NORTH_AMERICA" in blob
@@ -601,6 +632,51 @@ def test_batch_requests_get_one_response_per_request_and_notifications_none():
     assert [r.get("id") for r in responses] == [1, None, 2]
     assert responses[1]["error"]["code"] == -32600
     assert any(t["name"] == "find_hiring_companies" for t in responses[2]["result"]["tools"])
+
+
+def test_malformed_params_and_arguments_are_structured_errors_without_api_calls(monkeypatch):
+    calls = []
+
+    async def api(*args):
+        calls.append(args)
+        return {"success": True, "data": []}
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    malformed_params, status = asyncio.run(entry._handle_body(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["bad"]}, "key", "hr",
+    ))
+    malformed_args, _ = asyncio.run(entry._handle_body(
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": ["bad"]}}, "key", "hr",
+    ))
+    invalid_number, _ = asyncio.run(entry._handle_body(
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": {"headcount_max": "small"}}}, "key", "hr",
+    ))
+    assert status == 200
+    assert malformed_params["error"]["code"] == -32602
+    assert malformed_args["error"]["code"] == -32602
+    assert invalid_number["result"]["isError"]
+    assert invalid_number["result"]["_meta"]["usage"] == {"api_calls": 0, "credits_used": 0}
+    assert calls == []
+
+
+def test_mixed_success_batch_keeps_successful_items_when_an_item_fails(monkeypatch):
+    async def api(*_args):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    body = [
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": {"limit": 1}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+    ]
+    responses, status = asyncio.run(entry._handle_body(body, "key", "hr"))
+    assert status == 200 and [response["id"] for response in responses] == [1, 2, 3]
+    assert responses[0]["result"] == {}
+    assert responses[1]["result"]["isError"]
+    assert responses[1]["result"]["_meta"]["usage"] == {
+        "api_calls": 1, "credits_used": 0, "credits_known": False,
+    }
+    assert "tools" in responses[2]["result"]
 
 
 def test_empty_batch_and_non_object_body_are_invalid_requests():
