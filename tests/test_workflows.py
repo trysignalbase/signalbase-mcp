@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 import entry
@@ -709,3 +710,25 @@ def test_ats_office_metadata_must_match_requested_place(monkeypatch):
 
 def test_malformed_source_url_does_not_abort_lead_evidence():
     assert entry._source_named_lead({"sources": [{"url": "http://[bad", "title": "Round led by Safe Capital"}]}) == "Safe Capital"
+
+
+def test_chunked_ats_response_is_cancelled_at_byte_limit(monkeypatch):
+    class Decoder:
+        @staticmethod
+        def new(*args):
+            return Decoder()
+        def decode(self, value=None, options=None):
+            return "" if value is None else value.text
+    class Reader:
+        def __init__(self):
+            self.values = [SimpleNamespace(byteLength=3, text="abc"), SimpleNamespace(byteLength=3, text="def")]
+            self.cancelled = False
+        async def read(self):
+            return SimpleNamespace(done=not self.values, value=self.values.pop(0) if self.values else None)
+        async def cancel(self):
+            self.cancelled = True
+    reader = Reader()
+    response = SimpleNamespace(body=SimpleNamespace(getReader=lambda: reader))
+    monkeypatch.setattr(entry, "TextDecoder", Decoder)
+    assert asyncio.run(entry._wf_bounded_response_text(response, maximum=5)) is None
+    assert reader.cancelled is True
