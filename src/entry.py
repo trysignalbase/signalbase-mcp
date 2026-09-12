@@ -2381,6 +2381,9 @@ def _wf_finalize_company(company, args):
             published = _wf_date(source.get("published_at"))
             if published and any(args.get(k) is not None for k in ("posted_from", "posted_to", "posted_within_days", "posting_age_days_min")):
                 bounds = _wf_hiring_params(args)
+                if args.get("posting_age_days_min") is not None:
+                    age_limit = _wf_day(_wf_now(args) - timedelta(days=args["posting_age_days_min"]))
+                    bounds["dateTo"] = min(bounds.get("dateTo") or age_limit, age_limit)
                 if (bounds.get("dateFrom") and _wf_day(published) < bounds["dateFrom"]) or (bounds.get("dateTo") and _wf_day(published) > bounds["dateTo"]):
                     flags.append({"code":"source_posting_date_conflict", "posting_id":posting.get("id"), "status":"needs_review", "source_url":source.get("canonical_url"), "source_published_at":source["published_at"], "indexed_posted":posting.get("posted"), "requested_from":bounds.get("dateFrom"), "requested_to":bounds.get("dateTo"), "reason":"Employer publication date is outside the requested window. The indexed date may be a repost; verify recency instead of treating it as a new vacancy."})
     company["screening"] = {"status": "needs_review" if flags else "no_detected_conflict", "flags": flags, "scope": "Returned batch only; absence of a flag is not independent verification."}
@@ -3238,6 +3241,9 @@ next(t for t in HR_WORKFLOW_TOOLS if t["name"] == "research_investor_activity")[
     "investor_city": _wf_prop("string", "Compatibility alias of investor_headquarters; never provide conflicting values."),
     "verbose": WF_COMMON_PROPS["verbose"],
 })
+INVESTOR_WORKFLOW_SCHEMA = next(t for t in HR_WORKFLOW_TOOLS if t["name"] == "research_investor_activity")["inputSchema"]
+INVESTOR_WORKFLOW_SCHEMA.pop("required")
+INVESTOR_WORKFLOW_SCHEMA["anyOf"] = [{"required":["investor_headquarters"]}, {"required":["investor_city"]}]
 
 
 WORKFLOW_ARG_HINTS = {
@@ -3271,6 +3277,8 @@ async def _run_hr_workflow(name, args, api_key):
             raise WorkflowError(f"Conflicting {alias} and {canonical}; supply one value.")
         args[canonical] = args.pop(alias)
         applied[alias] = canonical
+    if name == "research_investor_activity" and "investor_headquarters" not in args:
+        raise WorkflowError("investor_headquarters (or its investor_city alias) is required")
     descriptor = next(t for t in HR_WORKFLOW_TOOLS if t["name"] == name)
     props = descriptor["inputSchema"]["properties"]
     if "count" not in props and args.get("count") is False:

@@ -169,6 +169,11 @@ def test_investor_city_alias_is_an_explicit_headquarters_filter(monkeypatch):
     result=asyncio.run(entry._run_hr_workflow('research_investor_activity',{'investor_city':'Toronto'},'key'))
     assert captured['investor_headquarters']=='Toronto'
     assert result['argument_aliases_applied']=={'investor_city':'investor_headquarters'}
+    schema=next(t for t in entry.HR_WORKFLOW_TOOLS if t['name']=='research_investor_activity')['inputSchema']
+    assert not schema.get('required')
+    assert {'required':['investor_city']} in schema['anyOf']
+    with pytest.raises(entry.WorkflowError,match='required'):
+        asyncio.run(entry._run_hr_workflow('research_investor_activity',{},'key'))
 
 
 @pytest.mark.parametrize('source,expected', [
@@ -188,3 +193,12 @@ def test_open_source_does_not_override_requested_work_mode_or_recency(source,exp
         assert result['match_status']=='needs_review'
     else:assert result['match_status']=='supported_source_verified'
     assert result['postings'][0]['source_verified_open'] is True
+
+
+def test_source_age_is_independent_of_explicit_posted_to():
+    args={'posting_age_days_min':31,'posted_to':'2026-09-12','as_of':'2026-09-12T00:00:00Z','required_evidence':['verified_live_vacancy']}
+    company=entry._wf_company_results([{'companyId':'c','id':'j','title':'Engineer','datePosted':'2026-07-01'}],args)[0]
+    company['postings'][0].update(source_verified_open=True,source_verification={'status':'open','published_at':'2026-09-10T00:00:00Z'})
+    result=entry._wf_finalize_company(company,args)
+    assert result['match_status']=='needs_review'
+    assert result['screening']['flags'][0]['requested_to']=='2026-08-12'
