@@ -34,6 +34,7 @@
         "headcount_growth_min",
         "headcount_growth_window",
         "include_expired",
+        "include_total",
         "job_countries",
         "job_locations",
         "limit",
@@ -215,6 +216,7 @@
     }
   ],
   "documented_new_parameters": [
+    "include_total",
     "job_locations",
     "exclude_company_countries",
     "exclude_staffing_agencies",

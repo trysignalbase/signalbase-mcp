@@ -110,6 +110,21 @@ rates, and does not infer a particular role from an any-hire benchmark.
 
 ## Defaults and controls
 
+- Source claims reject negated, historical, hypothetical and different-employer
+  statements. `first_hire_scope` separates company, regional and functional first
+  hires; a regional first hire requires an explicit place and `job_locations`.
+- HR results include `screening` flags for employer/intermediary, explicit headcount,
+  source-company and specific software-role conflicts. Flags preserve the rows and
+  source evidence while setting `match_status=needs_review`. They do not repair data.
+- `verify_live` can follow explicit Apply links and validated redirects from the
+  supported public job boards to Greenhouse, Lever or Ashby. Job identity and title
+  must match before verification; empty/invalid JSON never verifies a vacancy.
+  The response includes the source chain and counters for attempts, HTTP requests,
+  resolved postings and verified postings. Missing public listings remain unknown.
+- Description workflows use `include_total=false` by default: total counts are null,
+  and `hasNextPage` is computed from a lookahead row. `count=true` remains an exact
+  indexed count. Timeout usage explicitly marks unknown credit cost.
+
 - Hiring searches request open postings. An explicit historical end date or past
   calendar preset retains history. `include_expired=true` includes history;
   explicit `false` filters to open postings even with dates.

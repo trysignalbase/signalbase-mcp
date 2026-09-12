@@ -670,8 +670,8 @@ def test_ashby_board_fetch_is_deduplicated(monkeypatch):
     async def public(url):
         calls.append(url)
         return 200, {"jobs": [
-            {"jobPostingId": "one", "jobUrl": "https://jobs.ashbyhq.com/acme/one"},
-            {"jobPostingId": "two", "jobUrl": "https://jobs.ashbyhq.com/acme/two"},
+            {"title": "Engineer", "jobPostingId": "one", "jobUrl": "https://jobs.ashbyhq.com/acme/one"},
+            {"title": "Designer", "jobPostingId": "two", "jobUrl": "https://jobs.ashbyhq.com/acme/two"},
         ]}
     monkeypatch.setattr(entry, "_call_api", api)
     monkeypatch.setattr(entry, "_wf_public_json", public)

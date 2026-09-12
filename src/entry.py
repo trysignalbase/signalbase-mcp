@@ -11,7 +11,8 @@ import json
 import re
 import time
 from copy import deepcopy
-from urllib.parse import unquote, urlsplit
+from html.parser import HTMLParser
+from urllib.parse import unquote, urlsplit, urljoin, parse_qsl
 from datetime import datetime, timedelta, timezone
 from pyodide.ffi import to_js
 from js import Response, Headers, Object, TextDecoder, fetch, JSON
@@ -1194,6 +1195,7 @@ def _expose_api_filters(tools):
             "date_basis": {"type": "string", "enum": ["announced", "occurred_at"], "description": "Date the window applies to; 'announced' uses the announcement date when recorded."},
         },
         "search_hiring_signals": {
+            "include_total": {"type": "boolean", "description": "False skips full-cohort totals on data pages; pagination.totalCount is null and hasNextPage is determined with one lookahead row. Classic default keeps exact totals."},
             "role_logic": {"type": "string", "enum": ["and", "or"], "description": "Combine explicit/inferred position and department filters with AND or OR."},
             "job_locations": {"type": "array", "items": {"type": "string"}, "description": "OR of job countries/regions and job metros (Dubai, Berlin, San Francisco, San Francisco Bay Area). Also matches posts stored without a country code by their location text."},
             "exclude_company_countries": {"type": "string", "description": "Exclude company HQ countries only (e.g. jobs in Poland at non-Polish companies: job_locations=[\"Poland\"], exclude_company_countries=PL)."},
@@ -1808,11 +1810,16 @@ async def _wf_fetch(endpoint, params, api_key, ledger):
     try:
         result = await asyncio.wait_for(_call_api(endpoint, params, api_key), timeout=min(40, remaining))
     except Exception as error:
+        ledger["credits_known"] = False
+        ledger["requests_with_unknown_cost"] = ledger.get("requests_with_unknown_cost", 0) + 1
         raise WorkflowError(f"Upstream request failed ({type(error).__name__}); no result inferred.") from error
     if isinstance(result, dict):
         usage_meta = result.get("meta") or ((result.get("body") or {}).get("meta") if isinstance(result.get("body"), dict) else {}) or {}
         ledger["credits_used"] += usage_meta.get("creditsUsed", 0)
     if not isinstance(result, dict) or result.get("error"):
+        if not params.get("count") and (not isinstance(result, dict) or "creditsUsed" not in usage_meta):
+            ledger["credits_known"] = False
+            ledger["requests_with_unknown_cost"] = ledger.get("requests_with_unknown_cost", 0) + 1
         raise WorkflowError(_format_api_error(result) if isinstance(result, dict) else "Unexpected API response")
     if not isinstance(result.get("pagination"), dict) or not isinstance(result.get("data"), list):
         raise WorkflowError("Unexpected API envelope; data and pagination are required.")
@@ -1846,7 +1853,7 @@ SOURCE_TEXT_PATTERNS = {
         re.I,
     ),
     "founder_right_hand": re.compile(
-        r"\b(?:right[- ]hand (?:to|of) (?:our |the )?(?:founder|co-founder|ceo)|(?:our |the )?(?:founder|co-founder|ceo)'s right[- ]hand)\b",
+        r"\b(?:right[- ]hand (?:to|of) (?:our |the )?(?:founder|co-founder)|(?:our |the )?(?:founder|co-founder)['’]s right[- ]hand)\b",
         re.I,
     ),
     "office_presence": re.compile(
@@ -1943,9 +1950,18 @@ def _wf_source_claims(row, requested, args):
     claims = {}
     for requirement in requested:
         pattern = SOURCE_TEXT_PATTERNS.get(requirement)
-        match = pattern.search(text) if pattern and text else None
-        if match:
+        for match in pattern.finditer(text) if pattern and text else ():
             quote = _wf_sentence(text, match.start(), match.end())
+            # Conservative sentence-level polarity/subject check. Ambiguous or
+            # historical wording remains unknown; another positive sentence can
+            # still qualify. A quote alone must never reverse a negated claim.
+            if not _wf_affirmative_claim(quote):
+                continue
+            scope = None
+            if requirement == "first_hire":
+                scope = _wf_first_hire_scope(quote, row, args)
+                if scope is None:
+                    continue
             if requirement in {"office_presence", "office_opening"}:
                 office_place = _wf_office_location_phrase(quote)
                 if not office_place or not _wf_office_place_matches(office_place, args, row.get("location")):
@@ -1957,13 +1973,16 @@ def _wf_source_claims(row, requested, args):
                 "posting_id": row.get("id"),
                 "source_url": row.get("jobUrl"),
                 "qualification": "Explicit employer wording in the indexed posting; not independently verified.",
+                **({"scope": scope} if scope else {}),
             }
+            break
     location = html.unescape(row.get("location") or "")
     office_location = location if re.search(r"\boffices?\s+(?:in|located in)\b", location, re.I) else _wf_office_location_phrase(location)
     if (
         "office_presence" in requested
         and "office_presence" not in claims
         and office_location
+        and _wf_affirmative_claim(location)
         and _wf_office_place_matches(office_location, args, location)
     ):
         claims["office_presence"] = {
@@ -1976,6 +1995,36 @@ def _wf_source_claims(row, requested, args):
             "qualification": "The posting's source-derived location explicitly says office(s); this supports presence, not a new office opening.",
         }
     return claims
+
+
+def _wf_affirmative_claim(quote):
+    if "?" in quote:
+        return False
+    return not re.search(
+        r"\b(?:not|no|never|neither|without|formerly|previously|historically|was|were|had|might|may|could|would|if|considering|stopped|ceased|halted|abandoned|closed|experience|experienced|familiarity)\b"
+        r"|n['’]t\b|\b(?:another|other|client['’]?s?) compan(?:y|ies)\b"
+        r"|\b(?:used to|at a previous|on behalf of|seeking (?:a |an )?(?:budget|funding))\b",
+        quote, re.I,
+    )
+
+
+def _wf_first_hire_scope(quote, row, args):
+    target = re.search(r"\b(?:you(?:['’]ll| will) be|we(?:['’]re| are) (?:now )?(?:hiring|seeking|looking for)|join us as|this (?:is|will be)) (?P<hire>(?:our|the) first [^.;]+)", quote, re.I)
+    if not target:
+        return None
+    hire = target.group("hire")
+    scope = args.get("first_hire_scope", "company")
+    generic = re.match(r"(?:our|the) first (?:ever )?(?:employee|hire|team member)\b", hire, re.I)
+    regional = re.search(r"\bfirst (?:ever )?(?:employee|hire|team member) (?:(?:based|located) )?(?:in|for|within) ([^,.;]+?)(?=\s+(?:and|working|serving|supporting)\b|[,.;]|$)", hire, re.I)
+    if scope == "regional":
+        if generic and regional and args.get("job_locations") and _wf_office_place_matches(regional.group(1), args):
+            return scope
+        return None
+    if scope == "company":
+        return scope if generic and not regional else None
+    # Functional-first wording is only used when the caller explicitly asks
+    # for that scope. It never proves the first company/regional employee.
+    return "function" if re.match(r"(?:our|the) first (?:[\w-]+ ){1,4}(?:hire|employee|team member)\b", hire, re.I) else None
 
 
 # Sector presets -> the company industry labels actually stored (live labels,
@@ -2074,6 +2123,10 @@ def _wf_requirements(args, supported=()):
 def _wf_hiring_params(args, funded=False):
     now = _wf_now(args)
     params = {"filter_version": 2, "include_expired": False, "sort_by": "date_posted", "sort_order": "desc", "workflow_evidence": True}
+    if args.get("description_keywords") and args.get("count") is not True:
+        params["include_total"] = args.get("include_total", False)
+    elif "include_total" in args:
+        params["include_total"] = args["include_total"]
     if args.get("as_of"):
         params["open_as_of"] = now.isoformat()
     places = _wf_strings(args.get("job_locations"))
@@ -2173,7 +2226,40 @@ def _wf_funding_identity(company_name, domain, funding):
         return "supported_by_source_title", "A stored source title explicitly names the indexed company."
     if owned:
         return "supported_by_company_domain", "A stored source is on the indexed company's domain; this is self-published evidence."
-    return "needs_source_review", "No stored source title explicitly links the round to the indexed company."
+    return "needs_source_review", "Source titles/domains do not establish company identity with sufficient confidence; a matching single-token name still requires corroboration."
+
+
+def _wf_screen_row(row, args):
+    """Evidence-backed review flags, never a company blacklist or a data repair."""
+    flags = []
+    description = row.get("companyDescription") or ""
+    job_text = row.get("descriptionText") or ""
+    intermediary = re.search(r"\b(?:recruit(?:ing|ment) (?:platform|marketplace)|hiring (?:platform|marketplace)|connect(?:s|ing)? (?:candidates|talent) with|on behalf of (?:our |a )?client|for (?:one of )?our clients|job (?:is )?at another company)\b", description + " " + job_text, re.I)
+    if intermediary:
+        flags.append({"code": "possible_intermediary", "status": "needs_review", "quote": _wf_sentence(description + " " + job_text, intermediary.start(), intermediary.end()), "reason": "The advertised employer may differ from the indexed recruiting company."})
+    size = row.get("companyEmployeeCount")
+    size_match = re.search(r"\b(?:we (?:have|employ|are a team of)|our (?:global )?(?:team|workforce) (?:has|includes|consists of))\s+(?:(?:over|more than|approximately|about)\s+)?([\d,]+)\s+(?:employees|team members)\b", description, re.I)
+    if size_match and isinstance(size, (int, float)) and size > 0 and _wf_affirmative_claim(_wf_sentence(description, size_match.start(), size_match.end())):
+        claimed = int(size_match[1].replace(",", ""))
+        if claimed >= max(100, size * 5):
+            flags.append({"code": "headcount_conflict", "status": "needs_review", "stored": size, "source_claim": claimed, "quote": _wf_sentence(description, size_match.start(), size_match.end())})
+    role = str(args.get("role") or "").lower()
+    software_specific = bool(re.search(r"software|full.?stack|backend|frontend|\bai\b|machine learning", role))
+    if software_specific and re.search(r"\b(?:sales|solutions|pre[- ]sales|technical account) (?:engineer|manager)\b", str(row.get("title") or ""), re.I):
+        flags.append({"code": "adjacent_role", "status": "needs_review", "title": row.get("title"), "reason": "Sales/solutions engineering does not by itself establish software-development duties."})
+    # Source subjects are checked separately from loose mention matching. A
+    # release about another company remains reviewable even if the index is
+    # marked verified. A single conflicting source never deletes the record.
+    company_name = " ".join(_wf_identity_tokens(row.get("companyName")))
+    for funding in row.get("matchedFunding") or []:
+        for source in funding.get("sources") or []:
+            title = source.get("title") if isinstance(source, dict) else None
+            subject = re.match(r"^\s*([^:|]{2,80}?)\s+(?:raises|secures|closes)\s+(?:[£€$]|USD\b|EUR\b|GBP\b|\d)", title or "", re.I)
+            if subject and company_name:
+                named = " ".join(_wf_identity_tokens(subject[1]))
+                if named and company_name != named and not named.endswith(" " + company_name):
+                    flags.append({"code": "funding_subject_conflict", "status": "needs_review", "signal_id": funding.get("signalId"), "source_url": source.get("url"), "quote": title, "source_company": subject[1], "indexed_company": row.get("companyName")})
+    return flags
 
 
 def _wf_indexed_criteria(args):
@@ -2193,12 +2279,16 @@ def _wf_finalize_company(company, args):
     supported = company.pop("_source_claims", {})
     live_open = [posting for posting in company["postings"] if posting.get("source_verified_open") is True]
     if live_open and "verified_live_vacancy" in requested:
-        supported["verified_live_vacancy"] = {
+        distinct = {p.get("source_verification", {}).get("canonical_url") or p.get("url") for p in live_open}
+        titles = {str(p.get("title") or "").strip().casefold() for p in live_open}
+        enough = min(len(distinct), len(titles)) >= args.get("min_distinct_role_titles", 1)
+        if enough:
+            supported["verified_live_vacancy"] = {
             "requirement": "verified_live_vacancy",
             "status": "supported_source_verified",
             "posting_ids": [posting.get("id") for posting in live_open],
             "source_urls": [posting.get("url") for posting in live_open],
-        }
+            }
     company["criteria"] = _wf_indexed_criteria(args) + company["criteria"] + list(supported.values())
     company["unverified_requirements"] = _wf_requirements(args, supported)
     company["posting_count_in_batch"] = len(company["postings"])
@@ -2220,6 +2310,14 @@ def _wf_finalize_company(company, args):
     if live_open:
         levels.append("source_verified")
     company["evidence_level"] = levels[-1] if len(levels) == 1 else "mixed"
+    flags = company.pop("_screening", [])
+    for posting in company["postings"]:
+        if posting.get("source_verification", {}).get("status") == "identity_conflict":
+            flags.append({"code": "job_identity_conflict", "posting_id": posting.get("id"), "status": "needs_review"})
+    company["screening"] = {"status": "needs_review" if flags else "no_detected_conflict", "flags": flags, "scope": "Returned batch only; absence of a flag is not independent verification."}
+    if flags:
+        company["match_status"] = "needs_review"
+        company["qualification"] = "requires_prospect_review"
     return company
 
 
@@ -2239,14 +2337,18 @@ def _wf_company_results(rows, args):
             "description_excerpt": (row.get("companyDescription") or "")[:400], "growth_info": row.get("companyGrowthInfo"), "company_record_updated_at": row.get("companyUpdatedAt"),
             "postings": [], "funding": [], "funding_evidence_review": [], "criteria": [],
             "_source_claims": {},
+            "_screening": [],
             "data_quality": "Headcount is stored and may be estimated from a range; company/job associations were not repaired or externally verified.",
         })
+        for flag in _wf_screen_row(row, args):
+            if flag not in company["_screening"]:
+                company["_screening"].append(flag)
         if not any(p["id"] == row.get("id") for p in company["postings"]):
             description = row.get("descriptionText") or ""
             terms = re.findall(r"\w+", args.get("description_keywords") or "")
             first = min((description.lower().find(term.lower()) for term in terms if term.lower() in description.lower()), default=0)
             excerpt = description[max(0, first - 100):first + 400] if terms else None
-            company["postings"].append({"id": row.get("id"), "title": html.unescape(row.get("title") or ""), "location": row.get("location"), "job_country": row.get("jobCountry"), "posted": row.get("datePosted"), "valid_through": row.get("validThrough"), "url": row.get("jobUrl"), "open_status": "indexed_open", "indexed_open_as_of": args.get("as_of") or "request_time", "source_verified_open": None, **({"description_excerpt": excerpt} if excerpt else {})})
+            company["postings"].append({"id": row.get("id"), "title": html.unescape(row.get("title") or ""), "location": row.get("location"), "job_country": row.get("jobCountry"), "company_domain": domain, "company_name": row.get("companyName"), "posted": row.get("datePosted"), "valid_through": row.get("validThrough"), "url": row.get("jobUrl"), "open_status": "indexed_open", "indexed_open_as_of": args.get("as_of") or "request_time", "source_verified_open": None, **({"description_excerpt": excerpt} if excerpt else {})})
             for requirement, evidence in _wf_source_claims(row, requested, args).items():
                 company["_source_claims"].setdefault(requirement, evidence)
         for funding in row.get("matchedFunding") or []:
@@ -2295,7 +2397,9 @@ async def _wf_bounded_response_text(response, maximum=5_000_000):
 async def _wf_public_json(url):
     """Fetch only a caller-independent, allowlisted public ATS API URL."""
     try:
-        response = await fetch(url, to_js({"method": "GET", "redirect": "error", "headers": {"Accept": "application/json"}}, dict_converter=Object.fromEntries))
+        # Workers supports manual/follow redirect modes. Manual also prevents
+        # following an API redirect to an unvalidated host.
+        response = await fetch(url, to_js({"method": "GET", "redirect": "manual", "headers": {"Accept": "application/json"}}, dict_converter=Object.fromEntries))
         status = int(response.status)
         if status == 404:
             return status, None
@@ -2316,7 +2420,9 @@ def _wf_ats_target(url):
     """Translate a supported public job URL into an allowlisted ATS API URL."""
     try:
         parsed = urlsplit(url or "")
-    except ValueError:
+        if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port not in (None, 443):
+            return None
+    except (ValueError, TypeError, AttributeError):
         return None
     host = (parsed.hostname or "").lower()
     parts = [unquote(part) for part in parsed.path.split("/") if part]
@@ -2339,11 +2445,115 @@ def _wf_ats_target(url):
     return None
 
 
+# These are public job sources observed in HR results, not arbitrary hosts from
+# source HTML. Redirects and application links are revalidated at every hop.
+JOB_SOURCE_HOSTS = {
+    "feeny.ai", "workingnomads.com", "www.workingnomads.com",
+    "arbeitnow.com", "www.arbeitnow.com", "arbeitnow.co.uk", "www.arbeitnow.co.uk",
+    "himalayas.app", "www.himalayas.app", "djinni.co", "www.djinni.co",
+    "designjobsboard.com", "www.designjobsboard.com",
+    "jobs.generalcatalyst.com", "jobs.sapphireventures.com", "careers.speedinvest.com",
+    "talent.seedcamp.com", "cherry.getro.com",
+}
+
+
+def _wf_source_url_allowed(url):
+    if _wf_ats_target(url):
+        return True
+    try:
+        parsed = urlsplit(url)
+        return (parsed.scheme == "https" and parsed.hostname in JOB_SOURCE_HOSTS
+                and parsed.port in (None, 443) and not parsed.username and not parsed.password
+                and not any(re.search(r"token|api[_-]?key|authorization|password", key, re.I) for key, _ in parse_qsl(parsed.query)))
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+class _ApplicationLinks(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links, self._anchor, self._label = [], None, []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "a":
+            self._anchor = attrs.get("href")
+            self._label = [attrs.get("aria-label", ""), attrs.get("title", "")]
+
+    def handle_data(self, data):
+        if self._anchor:
+            self._label.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            if self._anchor and re.search(r"\bapply\b", " ".join(self._label), re.I):
+                self.links.append(self._anchor)
+            self._anchor, self._label = None, []
+
+
+def _wf_application_links(body, page_url):
+    parser = _ApplicationLinks()
+    parser.feed(body)
+    # Only explicit application actions. Navigation, company websites, related
+    # job cards and a generic ATS URL mentioned in prose are not proof.
+    candidates = {urljoin(page_url, html.unescape(link)) for link in parser.links}
+    candidates = {url for url in candidates if _wf_source_url_allowed(url)}
+    return sorted(candidates)
+
+
+async def _wf_public_page(url):
+    if not _wf_source_url_allowed(url):
+        return 0, None, None
+    try:
+        response = await fetch(url, to_js({"method": "GET", "redirect": "manual", "headers": {"Accept": "text/html"}}, dict_converter=Object.fromEntries))
+        status = int(response.status)
+        if status in (301, 302, 303, 307, 308):
+            return status, None, str(response.headers.get("location") or "")
+        if status != 200:
+            return status, None, None
+        body = await _wf_bounded_response_text(response, maximum=1_000_000)
+        return status, body, None
+    except Exception:
+        return 0, None, None
+
+
+async def _wf_resolve_employer_source(posting, public_cache):
+    current = posting.get("url")
+    chain, visited = [], set()
+    for _ in range(5):
+        if _wf_ats_target(current):
+            return current, chain, "resolved"
+        if current in visited or not _wf_source_url_allowed(current):
+            return None, chain, "unsupported_source"
+        visited.add(current)
+        tasks = public_cache.setdefault("_page_tasks", {}) if public_cache is not None else {}
+        loader = public_cache.get("_page_loader", _wf_public_page) if public_cache is not None else _wf_public_page
+        if current not in tasks:
+            tasks[current] = asyncio.create_task(loader(current))
+        status, body, redirect = await tasks[current]
+        chain.append({"url": current, "http_status": status or None})
+        if redirect:
+            current = urljoin(current, redirect)
+            continue
+        if status != 200 or not body:
+            return None, chain, "source_unavailable"
+        links = _wf_application_links(body, current)
+        if len(links) != 1:
+            return None, chain, "ambiguous_application_links" if links else "application_link_not_found"
+        current = links[0]
+    return (current, chain, "resolved") if _wf_ats_target(current) else (None, chain, "source_hop_limit")
+
+
 async def _wf_verify_live_posting(posting, public_cache=None):
     target = _wf_ats_target(posting.get("url"))
     checked = datetime.now(timezone.utc).isoformat()
     if not target:
-        return {"source_verified_open": None, "source_verification": {"status": "unsupported_source", "checked_at": checked, "method": "ats_allowlist"}}
+        resolved, chain, reason = await _wf_resolve_employer_source(posting, public_cache)
+        if not resolved:
+            return {"source_verified_open": None, "source_verification": {"status": reason, "checked_at": checked, "method": "employer_application_link", "source_chain": chain}}
+        result = await _wf_verify_live_posting({**posting, "url": resolved}, public_cache)
+        result["source_verification"].update({"source_chain": chain, "resolved_url": resolved, "original_url": posting.get("url")})
+        return result
     provider, api_url, identity = target
     if public_cache is not None:
         tasks = public_cache.setdefault("_tasks", {})
@@ -2355,14 +2565,35 @@ async def _wf_verify_live_posting(posting, public_cache=None):
         status, body = await _wf_public_json(api_url)
     if status == 404:
         return {"source_verified_open": None, "source_verification": {"status": "not_visible_in_public_api", "checked_at": checked, "method": provider + "_public_api", "http_status": 404}}
-    if not isinstance(body, dict):
+    if status != 200 or not isinstance(body, dict) or body.get("error"):
         return {"source_verified_open": None, "source_verification": {"status": "unknown", "checked_at": checked, "method": provider + "_public_api", "http_status": status or None}}
     matched = body
     if provider == "ashby":
-        candidates = body.get("jobs") or []
-        matched = next((job for job in candidates if str(job.get("jobPostingId") or job.get("id") or "") == identity["job_id"] or str(job.get("jobUrl") or "").rstrip("/").endswith("/" + identity["job_id"])), None)
+        candidates = body.get("jobs")
+        if not isinstance(candidates, list):
+            return {"source_verified_open": None, "source_verification": {"status": "invalid_source_response", "checked_at": checked, "method": "ashby_public_api"}}
+        matched = next((job for job in candidates if isinstance(job, dict) and _wf_same_ats_job(job.get("jobUrl"), target)), None)
         if matched is None:
             return {"source_verified_open": None, "source_verification": {"status": "not_visible_in_public_api", "checked_at": checked, "method": "ashby_public_api", "http_status": status}}
+    canonical = matched.get("absolute_url") or matched.get("hostedUrl") or matched.get("jobUrl")
+    source_title = matched.get("text") if provider == "lever" else matched.get("title")
+    correct_id = provider == "ashby" or str(matched.get("id")) == identity["job_id"]
+    # Greenhouse may return a custom employer career URL; ID + title still
+    # identify the job, but the custom domain must match the indexed employer.
+    canonical_matches = _wf_same_ats_job(canonical, target)
+    if not canonical_matches and provider == "greenhouse" and posting.get("company_domain"):
+        canonical_domain = _wf_domain({"website": canonical})
+        employer_domain = posting["company_domain"].lower()
+        canonical_matches = bool(canonical_domain and (canonical_domain == employer_domain or canonical_domain.endswith("." + employer_domain)))
+    if not correct_id or not canonical_matches or not isinstance(source_title, str) or not source_title.strip():
+        return {"source_verified_open": None, "source_verification": {"status": "invalid_source_response", "checked_at": checked, "method": provider + "_public_api"}}
+    if provider == "greenhouse" and "internal_job_id" in matched and matched["internal_job_id"] is None:
+        return {"source_verified_open": None, "source_verification": {"status": "prospect_post", "checked_at": checked, "method": "greenhouse_public_api"}}
+    if posting.get("title") and not _wf_titles_agree(posting["title"], source_title):
+        return {"source_verified_open": None, "source_verification": {"status": "identity_conflict", "reason": "source_title_differs", "source_title": source_title, "checked_at": checked, "method": provider + "_public_api"}}
+    employer = matched.get("company_name")
+    if employer and posting.get("company_name") and _wf_identity_tokens(employer) != _wf_identity_tokens(posting["company_name"]):
+        return {"source_verified_open": None, "source_verification": {"status": "identity_conflict", "reason": "source_employer_differs", "source_employer": employer, "checked_at": checked, "method": provider + "_public_api"}}
     raw_location = matched.get("location")
     categories = matched.get("categories") if isinstance(matched.get("categories"), dict) else {}
     location = raw_location if isinstance(raw_location, str) else raw_location.get("name") if isinstance(raw_location, dict) else categories.get("location")
@@ -2371,6 +2602,8 @@ async def _wf_verify_live_posting(posting, public_cache=None):
         "checked_at": checked,
         "method": provider + "_public_api",
         "http_status": status,
+        "source_title": source_title,
+        "job_id": identity["job_id"],
         "canonical_url": matched.get("absolute_url") or matched.get("hostedUrl") or matched.get("jobUrl"),
         "apply_url": matched.get("applyUrl") or matched.get("apply_url"),
         "workplace_type": matched.get("workplaceType") or matched.get("workplace_type"),
@@ -2383,6 +2616,19 @@ async def _wf_verify_live_posting(posting, public_cache=None):
     return {"source_verified_open": True, "source_verification": {key: value for key, value in metadata.items() if value is not None}}
 
 
+def _wf_same_ats_job(url, target):
+    other = _wf_ats_target(url)
+    return bool(other and other[0] == target[0] and other[2] == target[2] and other[1] == target[1])
+
+
+def _wf_titles_agree(left, right):
+    def normalized(value):
+        value = re.sub(r"\b(sr|jr)\.?\b", lambda m: {"sr": "senior", "jr": "junior"}[m[1].lower()], value, flags=re.I)
+        value = re.sub(r"\((?:remote|hybrid|m/f/d|f/m/d|m/w/d|all genders)\)", "", value, flags=re.I)
+        return re.sub(r"[^\w]+", " ", html.unescape(value).casefold()).strip()
+    return normalized(left) == normalized(right)
+
+
 async def _wf_verify_companies(companies, args, ledger):
     requested = set(_wf_strings(args.get("required_evidence")))
     if not args.get("verify_live") and "verified_live_vacancy" not in requested:
@@ -2391,16 +2637,18 @@ async def _wf_verify_companies(companies, args, ledger):
     postings = [(company, posting) for company in companies for posting in company["postings"]][:limit]
     ledger["source_checks"] = len(postings)
     semaphore = asyncio.Semaphore(8)
-    async def bounded_public(url):
+    ledger["source_http_requests"] = 0
+    async def bounded_public(url, page=False):
         try:
             async with semaphore:
                 remaining = ledger.get("_deadline", time.monotonic() + 8) - time.monotonic()
-                if remaining <= 0:
-                    return 0, None
-                return await asyncio.wait_for(_wf_public_json(url), timeout=min(8, remaining))
+                if remaining <= 0 or ledger["source_http_requests"] >= 60:
+                    return (0, None, None) if page else (0, None)
+                ledger["source_http_requests"] += 1
+                return await asyncio.wait_for(_wf_public_page(url) if page else _wf_public_json(url), timeout=min(8, remaining))
         except (Exception, asyncio.CancelledError):
-            return 0, None
-    public_cache = {"_tasks": {}, "_loader": bounded_public}
+            return (0, None, None) if page else (0, None)
+    public_cache = {"_tasks": {}, "_page_tasks": {}, "_loader": bounded_public, "_page_loader": lambda url: bounded_public(url, page=True)}
     async def check(posting):
         try:
             return await _wf_verify_live_posting(posting, public_cache)
@@ -2409,7 +2657,7 @@ async def _wf_verify_companies(companies, args, ledger):
     try:
         results = await asyncio.gather(*(check(posting) for _, posting in postings))
     finally:
-        pending = [task for task in public_cache["_tasks"].values() if not task.done()]
+        pending = [task for group in ("_tasks", "_page_tasks") for task in public_cache[group].values() if not task.done()]
         for task in pending:
             task.cancel()
         if pending:
@@ -2427,6 +2675,8 @@ async def _wf_verify_companies(companies, args, ledger):
                 "offices": offices, "posting_id": posting.get("id"), "source_url": posting.get("url"),
                 "qualification": "The employer's public ATS record explicitly associates the posting with these offices.",
             })
+    ledger["source_verified_postings"] = sum(posting.get("source_verified_open") is True for _, posting in postings)
+    ledger["source_resolved_postings"] = sum(bool(posting.get("source_verification", {}).get("resolved_url")) for _, posting in postings)
     return companies
 
 
@@ -2538,6 +2788,7 @@ async def _wf_hiring(args, key, ledger, funded=False):
     companies = _wf_company_results(rows, args)
     await _wf_verify_companies(companies, args, ledger)
     companies = [_wf_finalize_company(company, args) for company in companies]
+    companies.sort(key=lambda company: company["screening"]["status"] == "needs_review")
     query_status = "partial" if has_more or start_page != 1 or errors else "complete"
     company_states = {company["match_status"] for company in companies}
     if not companies:
@@ -2545,7 +2796,7 @@ async def _wf_hiring(args, key, ledger, funded=False):
         evidence_level = "indexed"
         supported_for_all = set()
     else:
-        match_status = "partial_evidence" if "partial_evidence" in company_states else (
+        match_status = "needs_review" if "needs_review" in company_states else "partial_evidence" if "partial_evidence" in company_states else (
             "supported_source_verified" if "supported_source_verified" in company_states else
             "supported_with_source_text" if "supported_with_source_text" in company_states else "supported_indexed"
         )
@@ -2556,6 +2807,7 @@ async def _wf_hiring(args, key, ledger, funded=False):
             for company in companies
         ))
     return {"status": query_status, "query_status": query_status, "match_status": match_status, "evidence_level": evidence_level, "interpreted_query": params, "companies": companies, "unverified_requirements": _wf_requirements(args, supported_for_all), "errors": errors,
+            "screening_summary": {"companies_needing_review": sum(c["screening"]["status"] == "needs_review" for c in companies), "scope": "Returned batch. Review-flagged companies follow the other results; indexed totals include both."},
             "coverage": {"matching_postings": total, "rows_scanned": len(rows), "start_page": start_page, "complete_for_indexed_filters": not has_more and start_page == 1, "query_exhausted": not has_more, "complete_flag_scope": "this response, not pages accumulated by the caller", "next_page": page if has_more else None, "company_groups_span_pages": True, "funding_evidence_limit_per_posting": 5, "staffing_exclusion": "known staffing/recruitment industry labels only; unknown company types remain"}}
 
 
@@ -2853,6 +3105,8 @@ WF_HIRING_PROPS = {
     "exclude_staffing_agencies": _wf_prop("boolean", "Exclude known staffing/recruiting industry labels. Unknown classifications remain, clearly disclosed.", default=True),
     "work_mode": _wf_prop("string", "Remote work arrangement advertised in title/location. Occupational uses such as remote sensing do not qualify; description text is checked for negative statements. Does not imply worldwide eligibility.", enum=["remote"]),
     "description_keywords": _wf_prop("string", "Optional full-text job-description keywords. Returns a source excerpt around matches. Wording is evidence of an advertised claim, not independent confirmation."),
+    "first_hire_scope": _wf_prop("string", "Scope of required_evidence=first_hire: company (default), regional (requires job_locations), or function. A first functional hire cannot prove first regional employee.", enum=["company", "regional", "function"]),
+    "include_total": _wf_prop("boolean", "Include exact posting totals on data pages. Description searches default false to avoid a second full-text scan; page continuation still works. count=true always counts the full indexed cohort."),
     "headcount_growth_window": _wf_prop("string", "Stored company headcount-growth window used with headcount_growth_min; defaults to 3m.", enum=["1m", "3m", "6m", "9m", "12m"]),
     "headcount_growth_min": _wf_prop("number", "Minimum stored headcount-growth value. This is an indexed company metric, not proof that each vacancy is expansion hiring.", minimum=-10000, maximum=10000),
     "startup_definition": _wf_prop("object", "Caller-defined startup cohort. No universal startup flag is assumed; specify the measurable rules that matter.", properties={
@@ -2936,6 +3190,10 @@ async def _run_hr_workflow(name, args, api_key):
         raise WorkflowError("headcount_min cannot exceed headcount_max")
     if args.get("headcount_growth_window") is not None and args.get("headcount_growth_min") is None:
         raise WorkflowError("headcount_growth_window requires headcount_growth_min")
+    if args.get("first_hire_scope") and "first_hire" not in _wf_strings(args.get("required_evidence")):
+        raise WorkflowError("first_hire_scope requires required_evidence=['first_hire']")
+    if args.get("first_hire_scope") == "regional" and not args.get("job_locations"):
+        raise WorkflowError("first_hire_scope=regional requires job_locations")
     ledger = {"api_calls": 0, "credits_used": 0, "max_api_calls": _wf_int(args, "max_api_calls", 12, 2, 30), "_deadline": time.monotonic() + 45}
     try:
         if name == "find_hiring_outlook":
@@ -3001,6 +3259,14 @@ recruiting and advertised founding/regional hires belong in the current-hiring w
 with separate company_countries and job_locations; they do not establish an office,
 budget or a first actual hire. Do not substitute generic quiet-company forecasts.
 They disclose interpreted_query, coverage/next_page, usage and unverified_requirements.
+Read screening.flags before presenting prospects. A needs_review company can be a
+labelled alternative, but cannot be a clean match without resolving the flagged
+employer, headcount, funding identity or role evidence. All rows are retained.
+For 'first hire there', set first_hire_scope=regional and job_locations; first in a
+function is not proof of a first regional employee. Founder right-hand requires
+explicit founder language; CEO alone is insufficient.
+Description searches default to include_total=false; matching_postings=null means
+the total was not requested. Use next_page to continue. A timeout is unknown, not zero.
 Read query_status, match_status and evidence_level separately: query completeness is
 never downgraded merely because a claim needs evidence or a matching funding record
 needs source review. status remains as a compatibility alias for query_status.
