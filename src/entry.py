@@ -1208,6 +1208,7 @@ def _expose_api_filters(tools):
             "min_distinct_titles": {"type": "integer", "minimum": 2, "maximum": 100, "description": "Company has at least this many distinct job titles in the filtered set (multiple roles)."},
             "max_company_postings": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Company has at most this many postings in the filtered set. This is not proof of a first hire or office opening."},
             "work_mode": {"type": "string", "enum": ["remote"], "description": "Remote work arrangement stated in title/location; occupational uses do not qualify and description text is checked for negative statements."},
+            "role_scope": {"type": "string", "enum": ["software"], "description": "Optional software-engineering title scope; excludes sales/solutions/hardware engineering. Generic engineering is unchanged."},
             "open_as_of": {"type": "string", "description": "ISO timestamp anchoring open/freshness evaluation. This does not recreate the historical state of the index."},
             "sector": {"type": "string", "enum": sorted(SECTOR_INDUSTRIES), "description": "Industry preset (fmcg / cpg / consumer goods, food and beverage, beauty / cosmetics / personal care) mapped to stored industry labels."},
             "funding_rounds": {"type": "string", "description": "Only companies with a matching round, e.g. 'Seed,Pre-Seed'. Joined before counting."},
@@ -1857,7 +1858,7 @@ SOURCE_TEXT_PATTERNS = {
         re.I,
     ),
     "office_presence": re.compile(
-        r"\b(?:(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in)|(?:based|work|working) (?:in|from|at) (?:our|the) (?:[\w.'-]+ ){1,3}(?:office|hub|studio)|offices? (?:in|located in))\b",
+        r"\b(?:(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in)|(?:(?:based|work|working) (?:in|from|at)|(?:come|coming|return|returning) to|visit|visiting) our (?:[\w.'-]+ ){1,3}(?:office|hub|studio)|offices? (?:in|located in))\b",
         re.I,
     ),
     "office_opening": re.compile(
@@ -1912,7 +1913,11 @@ def _wf_sentence(text, start, end):
 
 
 def _wf_office_location_phrase(text):
+    if re.search(r"\b(?:client|customer|partner)['’]?s?\b|\b(?:former|future|proposed|planned|previous)\b", text or "", re.I):
+        return None
     patterns = (
+        r"\b(?:come|coming|return|returning) to our (?P<place>[\wÀ-ÖØ-öø-ÿ.' -]{2,60}?) (?:office|hub|studio)\b",
+        r"\b(?:visit|visiting) our (?P<place>[\wÀ-ÖØ-öø-ÿ.' -]{2,60}?) (?:office|hub|studio)\b",
         r"\b(?:based|work|working) (?:in|from|at) (?:our|the) (?P<place>[\wÀ-ÖØ-öø-ÿ.' -]{2,60}?) (?:office|hub|studio)\b",
         r"\b(?:our|the company'?s) (?:office|hub|studio|headquarters|hq) (?:is )?(?:in|located in|based in) (?P<place>[^,.;\n]{2,100}?)(?=\s+and\b|[,.;\n]|$)",
         r"\b(?:offices?|hubs?|studios?) (?:in|located in) (?P<place>[^.;\n]{2,120}?)(?=\s+and\s+(?:(?:our|the)\b|(?:serves?|supports?|covers?|works?|sells?)\b)|[.;\n]|$)",
@@ -1925,7 +1930,7 @@ def _wf_office_location_phrase(text):
 
 
 def _wf_office_place_matches(text, args, row_location=None):
-    places = _wf_strings(args.get("job_locations"))
+    places = _wf_strings(args.get("office_locations") or args.get("job_locations"))
     if not places:
         return True
     folded = text.lower()
@@ -1933,6 +1938,8 @@ def _wf_office_place_matches(text, args, row_location=None):
         terms = OFFICE_PLACE_HINTS.get(place.lower(), (place.lower(),))
         if any(re.search(rf"(?<![a-z]){re.escape(term)}(?![a-z])", folded) for term in terms):
             return True
+    if args.get("office_locations"):
+        return False
     # The API has already applied its full job-geography resolver to
     # row_location. Requiring the office phrase to share a meaningful location
     # token ties "Warsaw office" to that matched row without accepting unrelated
@@ -1977,7 +1984,7 @@ def _wf_source_claims(row, requested, args):
             }
             break
     location = html.unescape(row.get("location") or "")
-    office_location = location if re.search(r"\boffices?\s+(?:in|located in)\b", location, re.I) else _wf_office_location_phrase(location)
+    office_location = _wf_office_location_phrase(location)
     if (
         "office_presence" in requested
         and "office_presence" not in claims
@@ -2001,7 +2008,7 @@ def _wf_affirmative_claim(quote):
     if "?" in quote:
         return False
     return not re.search(
-        r"\b(?:not|no|never|neither|without|formerly|previously|historically|was|were|had|might|may|could|would|if|considering|stopped|ceased|halted|abandoned|closed|experience|experienced|familiarity)\b"
+        r"\b(?:not|no|never|cannot|neither|without|formerly|previously|historically|was|were|had|might|may|could|would|if|considering|stopped|ceased|halted|abandoned|closed|experience|experienced|familiarity)\b"
         r"|n['’]t\b|\b(?:another|other|client['’]?s?) compan(?:y|ies)\b"
         r"|\b(?:used to|at a previous|on behalf of|seeking (?:a |an )?(?:budget|funding))\b",
         quote, re.I,
@@ -2017,7 +2024,7 @@ def _wf_first_hire_scope(quote, row, args):
     generic = re.match(r"(?:our|the) first (?:ever )?(?:employee|hire|team member)\b", hire, re.I)
     regional = re.search(r"\bfirst (?:ever )?(?:employee|hire|team member) (?:(?:based|located) )?(?:in|for|within) ([^,.;]+?)(?=\s+(?:and|working|serving|supporting)\b|[,.;]|$)", hire, re.I)
     if scope == "regional":
-        if generic and regional and args.get("job_locations") and _wf_office_place_matches(regional.group(1), args):
+        if generic and regional and args.get("job_locations") and _wf_office_place_matches(regional.group(1), {"office_locations": args["job_locations"]}):
             return scope
         return None
     if scope == "company":
@@ -2137,6 +2144,8 @@ def _wf_hiring_params(args, funded=False):
             params[field] = ",".join(_wf_strings(args[field]))
     if args.get("role"):
         params.update(_resolve_role(args["role"]))
+    if args.get("role_scope"):
+        params["role_scope"] = args["role_scope"]
     if args.get("min_distinct_role_titles") is not None:
         params["min_distinct_titles"] = _wf_int(args, "min_distinct_role_titles", 2, 2, 100)
     if args.get("max_postings_per_company") is not None:
@@ -2229,14 +2238,53 @@ def _wf_funding_identity(company_name, domain, funding):
     return "needs_source_review", "Source titles/domains do not establish company identity with sufficient confidence; a matching single-token name still requires corroboration."
 
 
+def _wf_names_compatible(left, right):
+    left, right = " ".join(_wf_identity_tokens(left)), " ".join(_wf_identity_tokens(right))
+    return bool(left and right and (left == right or left.startswith(right + " ") or right.startswith(left + " ")))
+
+
+def _wf_employer_identity_flags(row):
+    """Surface conflicting employer assertions, not generic role skills/customer names."""
+    profile = row.get("companyDescription") or ""
+    job = html.unescape(re.sub(r"<[^>]+>", " ", row.get("descriptionText") or ""))
+    name = row.get("companyName") or ""
+    flags = []
+    # Direct assertions naming the employer. Generic capability statements and
+    # lists of clients/technologies are intentionally outside this grammar.
+    for pattern in (
+        r"\b(?:This|The|this|the) (?:job|role|position) is (?:at|with|for) ([A-Z][\w.&-]*(?: [A-Z][\w.&-]*){0,4})(?=[.,!\n]|$)",
+        r"\bJoin ([A-Z][\w.&-]*(?: [A-Z][\w.&-]*){0,4}) as (?:our|a|an)\b",
+        r"(?:^|\n)\s*About (?:us|Us|the company|The Company)\s*[:\n]+\s*([A-Z][\w.&-]*(?: [A-Z][\w.&-]*){0,4}) (?:is|builds|provides)\b",
+    ):
+        match = re.search(pattern, job)
+        generic_subject = match and match[1].lower() in {"us", "our team", "the team", "our company", "the company", "it", "this", "we"}
+        if match and name and not generic_subject and not _wf_names_compatible(name, match[1]):
+            flags.append({"code":"employer_name_conflict","status":"needs_review","indexed_company":name,"source_employer":match[1],"quote":_wf_sentence(job,match.start(),match.end()),"source_url":row.get("jobUrl")})
+            break
+    # These require an employer self-description, not just a payments/blockchain
+    # skill in a job at a company in another industry. Keep both evidence excerpts.
+    conflicts = (
+        (r"defen[cs]e|flight hardware|space systems", r"(?:we are|we['’]re|\w+ is) (?:an? |the )?(?:payments|merchant[- ]of[- ]record|buy.now.pay.later)[^.!?\n]{0,65}(?:company|platform|provider)"),
+        (r"mental health|therapists", r"(?:as the |we are (?:a |the )?)buy now pay later (?:leader|company|platform)"),
+        (r"gender equality|women in leadership|equality network", r"(?:we are|\w+ is)[^.!?\n]{0,90}blockchain infrastructure compan(?:y|ies)"),
+    )
+    for profile_pattern, job_pattern in conflicts:
+        a, b = re.search(profile_pattern,profile,re.I), re.search(job_pattern,job,re.I)
+        if a and b:
+            flags.append({"code":"employer_business_conflict","status":"needs_review","indexed_company":name,"profile_quote":_wf_sentence(profile,a.start(),a.end()),"job_quote":_wf_sentence(job,b.start(),b.end()),"source_url":row.get("jobUrl"),"reason":"The job's employer self-description conflicts with the indexed company business; check the company association."})
+            break
+    return flags
+
+
 def _wf_screen_row(row, args):
     """Evidence-backed review flags, never a company blacklist or a data repair."""
     flags = []
     description = row.get("companyDescription") or ""
     job_text = row.get("descriptionText") or ""
-    intermediary = re.search(r"\b(?:recruit(?:ing|ment) (?:platform|marketplace)|hiring (?:platform|marketplace)|connect(?:s|ing)? (?:candidates|talent) with|on behalf of (?:our |a )?client|for (?:one of )?our clients|job (?:is )?at another company)\b", description + " " + job_text, re.I)
-    if intermediary:
+    intermediary = re.search(r"\b(?:recruit(?:ing|ment) (?:platform|marketplace)|hiring (?:platform|marketplace)|connect(?:s|ing)? (?:candidates|talent) with|(?:hiring|recruiting|seeking)[^.!?\n]{0,70}on behalf of (?:our |a )?client|(?:hiring|recruiting|seeking) (?:an? )?(?:[\w-]+ ){0,5}for one of our clients|job (?:is )?at another company)\b", description + " " + job_text, re.I)
+    if intermediary and not re.search(r"\b(?:not|never|no)\b|n['’]t\b", _wf_sentence(description + " " + job_text, intermediary.start(), intermediary.end()), re.I):
         flags.append({"code": "possible_intermediary", "status": "needs_review", "quote": _wf_sentence(description + " " + job_text, intermediary.start(), intermediary.end()), "reason": "The advertised employer may differ from the indexed recruiting company."})
+    flags.extend(_wf_employer_identity_flags(row))
     size = row.get("companyEmployeeCount")
     size_match = re.search(r"\b(?:we (?:have|employ|are a team of)|our (?:global )?(?:team|workforce) (?:has|includes|consists of))\s+(?:(?:over|more than|approximately|about)\s+)?([\d,]+)\s+(?:employees|team members)\b", description, re.I)
     if size_match and isinstance(size, (int, float)) and size > 0 and _wf_affirmative_claim(_wf_sentence(description, size_match.start(), size_match.end())):
@@ -2264,7 +2312,7 @@ def _wf_screen_row(row, args):
 
 def _wf_indexed_criteria(args):
     fields = (
-        "role", "headcount_min", "headcount_max", "company_countries", "job_locations",
+        "role", "role_scope", "headcount_min", "headcount_max", "company_countries", "job_locations",
         "posting_age_days_min", "min_distinct_role_titles", "posted_within_days",
         "posted_from", "posted_to", "work_mode", "description_keywords", "sector",
         "subcategories", "exclude_company_countries", "max_postings_per_company",
@@ -2291,8 +2339,16 @@ def _wf_finalize_company(company, args):
             }
     company["criteria"] = _wf_indexed_criteria(args) + company["criteria"] + list(supported.values())
     company["unverified_requirements"] = _wf_requirements(args, supported)
+    mode = args.get("required_evidence_mode", "all")
+    company["criteria_logic"] = {"required_evidence": mode}
+    any_of = set(_wf_strings(args.get("required_evidence_any_of")))
+    if any_of:
+        company["criteria_logic"]["required_evidence_any_of"] = sorted(any_of)
+        missing_required = any(key not in supported for key in requested if key not in any_of) or not any(key in supported for key in any_of)
+    else:
+        missing_required = bool(company["unverified_requirements"]) if mode == "all" else bool(requested and not any(key in supported for key in requested))
     company["posting_count_in_batch"] = len(company["postings"])
-    if company["unverified_requirements"]:
+    if missing_required:
         company["match_status"] = "partial_evidence"
         company["qualification"] = "partial"
     elif any(item["status"] == "supported_source_verified" for item in supported.values()):
@@ -3098,12 +3154,16 @@ WF_COMMON_PROPS = {
 
 WF_HIRING_PROPS = {
     **WF_COMMON_PROPS,
+    "office_locations": _wf_prop("array", "Places required for office_presence/opening evidence, independently of the job's location. A company with a Polish office can be hiring elsewhere.", items={"type":"string"}),
+    "required_evidence_mode": _wf_prop("string", "Whether all requested evidence claims or any one must hold. Use any for 'Polish founders OR offices in Poland'. Unmet branches remain explicitly unknown.", enum=["all","any"]),
+    "required_evidence_any_of": _wf_prop("array", "One OR subgroup of required_evidence. At least one subgroup claim must hold; all requirements outside it remain mandatory. E.g. [founder_origin, office_presence] does not waive verified_live_vacancy.", items={"type":"string", "enum":list(UNOBSERVED_REQUIREMENTS)}, minItems=2),
     "job_locations": _wf_prop("array", "OR of job countries/regions and supported cities/metros. E.g. [Belgium, US, Netherlands, Luxembourg, Dubai]. Dubai restricts UAE jobs to Dubai; Bay Area means job metro, not HQ. Also supports Berlin and San Francisco. Do not copy these places into company_countries as well: that ANDs an HQ filter.", items={"type": "string"}),
     "exclude_company_countries": _wf_prop("array", "Exclude company HQ countries only; can combine Poland jobs with excluding Polish HQ.", items={"type": "string"}),
     "subcategories": _wf_prop("array", "Company sector labels such as legal, cybersecurity, ai.", items={"type": "string"}),
     "company_domain": _wf_prop("array", "Optional company-domain pool.", items={"type": "string"}),
     "exclude_staffing_agencies": _wf_prop("boolean", "Exclude known staffing/recruiting industry labels. Unknown classifications remain, clearly disclosed.", default=True),
     "work_mode": _wf_prop("string", "Remote work arrangement advertised in title/location. Occupational uses such as remote sensing do not qualify; description text is checked for negative statements. Does not imply worldwide eligibility.", enum=["remote"]),
+    "role_scope": _wf_prop("string", "Opt-in software engineering titles, excluding sales/solutions/hardware engineering. Leave unset for generic engineering.", enum=["software"]),
     "description_keywords": _wf_prop("string", "Optional full-text job-description keywords. Returns a source excerpt around matches. Wording is evidence of an advertised claim, not independent confirmation."),
     "first_hire_scope": _wf_prop("string", "Scope of required_evidence=first_hire: company (default), regional (requires job_locations), or function. A first functional hire cannot prove first regional employee.", enum=["company", "regional", "function"]),
     "include_total": _wf_prop("boolean", "Include exact posting totals on data pages. Description searches default false to avoid a second full-text scan; page continuation still works. count=true always counts the full indexed cohort."),
@@ -3142,6 +3202,10 @@ def _wf_tool(name, description, properties, required=()):
 
 
 HR_WORKFLOW_TOOLS = [
+    _wf_tool("find_recent_appointments", "Find PEOPLE newly appointed to a role, not employers advertising vacancies. Use for 'freshly appointed CFOs in FMCG'. Returns named people, employer, role, announcement/start dates and source evidence. Do not use for 'companies hiring a new CFO', which asks for vacancies.", {
+        **{k: WF_HIRING_PROPS[k] for k in ("role", "sector", "as_of", "max_api_calls", "page", "page_size")},
+        "appointed_within_days": _wf_prop("integer", "Announcement recency, default 30 days. Does not prove when employment started.", minimum=0, maximum=3650),
+    }, required=["role"]),
     _wf_tool("find_hiring_companies", "Find companies with indexed open roles using explicit HQ/job geography, employee size, growth, caller-defined startup rules, posting age and optional funding criteria. Returns per-criterion evidence, independent query/match/evidence status and honest pagination. Can quote explicit employer claims and live-check allowlisted public ATS sources. Prefer over assembling generic searches.", WF_HIRING_PROPS),
     _wf_tool("find_funded_hiring_companies", "Find the actual intersection of funding and current hiring. The API joins BEFORE counts/pagination, so no manual domain batching or guessing the efficient search direction. A complete joined query stays query_status=complete even when source identity needs review. Same evidence and coverage as find_hiring_companies. Funding defaults to last 90 days.", WF_HIRING_PROPS),
     _wf_tool("find_hiring_outlook", "Potential company-level first visible hiring after leadership/funding triggers. Automatically checks prior posting AND announced-join history plus current jobs. Returns supplied cohort floors, never individualized probabilities or promised specific roles. A bounded sample with explicit coverage, not an exhaustive forecast.", {**WF_COMMON_PROPS, "candidate_offset": _wf_prop("integer", "Resume unchecked candidates on the same source page using coverage.next_candidate_offset.", minimum=0), "horizon_days": _wf_prop("integer", "Days from trigger; expired forecast windows excluded.", enum=[30, 60, 90], default=90), "quiet_lookback_days": _wf_prop("integer", "Operational pre-trigger quiet window; screenshot cohort definition is unknown.", minimum=1, maximum=365, default=90), "max_companies": _wf_prop("integer", "Maximum qualifying candidates in a bounded call.", minimum=1, maximum=10, default=3), "funding_rounds": WF_HIRING_PROPS["funding_rounds"], "funding_investor_type": WF_HIRING_PROPS["funding_investor_type"]}),
@@ -3194,9 +3258,13 @@ async def _run_hr_workflow(name, args, api_key):
         raise WorkflowError("first_hire_scope requires required_evidence=['first_hire']")
     if args.get("first_hire_scope") == "regional" and not args.get("job_locations"):
         raise WorkflowError("first_hire_scope=regional requires job_locations")
+    if args.get("required_evidence_any_of") and not set(args["required_evidence_any_of"]).issubset(args.get("required_evidence") or []):
+        raise WorkflowError("required_evidence_any_of must be a subset of required_evidence")
     ledger = {"api_calls": 0, "credits_used": 0, "max_api_calls": _wf_int(args, "max_api_calls", 12, 2, 30), "_deadline": time.monotonic() + 45}
     try:
-        if name == "find_hiring_outlook":
+        if name == "find_recent_appointments":
+            payload = await _wf_appointments(args, api_key, ledger)
+        elif name == "find_hiring_outlook":
             payload = await _wf_outlook(args, api_key, ledger)
         elif name == "research_investor_activity":
             payload = await _wf_investors(args, api_key, ledger)
@@ -3210,7 +3278,53 @@ async def _run_hr_workflow(name, args, api_key):
         raise
 
 
+async def _wf_appointments(args, key, ledger):
+    now = _wf_now(args)
+    params = {"filter_version": 2, "dateFrom": _wf_day(now - timedelta(days=_wf_int(args, "appointed_within_days", 30))), "dateTo": now.isoformat(), "page": args.get("page", 1), "limit": args.get("page_size", 25), "sort_by": "occurred_at", "sort_order": "desc"}
+    params.update(_resolve_role(args["role"]))
+    if args.get("sector"):
+        params["categories"] = _wf_sector_categories(args["sector"])
+    response = await _wf_fetch("/signals/job-changes", params, key, ledger)
+    appointments = [{"person": row.get("personName"), "company": row.get("companyName"), "role": row.get("newRole"), "announcement_date": row.get("occurredAt"), "start_date": row.get("startDate"), "sources": row.get("sources") or ([{"url": row["takenFrom"]}] if row.get("takenFrom") else []), "profile_url": row.get("personLinkedinUrl"), "industry": row.get("companyIndustry"), "evidence_excerpt": (row.get("postContent") or "")[:1400], "match_status": "supported_indexed", "evidence_caveat": "Appointment announcement, not an open vacancy. Recency does not establish the effective start date."} for row in response.get("data") or []]
+    pagination = response.get("pagination") or {}
+    status = "partial" if pagination.get("hasNextPage") or params["page"] != 1 else "complete"
+    return {"status": status, "query_status": status, "match_status": "supported_indexed" if appointments else "no_matches", "appointments": appointments, "interpreted_query": params, "coverage": {"matching_announcements": pagination.get("totalCount"), "next_page": params["page"] + 1 if pagination.get("hasNextPage") else None}}
+
+
 HR_INSTRUCTIONS = """Signalbase MCP v2 for HR and recruiting teams.
+
+Before searching, map EVERY original clause to a filter or required_evidence;
+list unsupported constraints explicitly. Do not replace the user's request with
+a simplified paraphrase. Appointment asks need people
+who joined a role, not vacancies. Software engineering excludes sales/hardware
+engineering; generic engineering does not. Multiple roles means distinct titles
+in the same requested date/location/role cohort, not duplicate job-board adverts.
+
+Recruiting constraint checklist:
+- Fresh appointments: find_recent_appointments(role, sector, appointed_within_days),
+  not find_hiring_companies. Hiring a new CFO is still a vacancy request.
+- Startup is NOT synonymous with legal/AI/remote/recently funded. Retain
+  required_evidence=['startup_status']; if using startup_definition, disclose
+  your operational employee/founding-year rules, do not call them universal.
+- Scaling: use headcount_growth_min with its window and retain company_scaling;
+  a job alone does not establish growth. Explain the chosen positive-growth proxy.
+- Founder OR office: required_evidence includes both, with
+  required_evidence_any_of=['founder_origin','office_presence']; unrelated
+  requirements remain AND. office_locations filters quoted office evidence,
+  independently of job_locations. Founder origin is not searchable: an office
+  search covers only that OR branch, not all matching companies.
+- Search office evidence with geographic phrases such as '"Warsaw office" OR
+  "office in Poland"', not the broad word office. A job in Poland is not office
+  evidence, and a Polish office can support a company hiring elsewhere.
+- First regional employee needs first_hire_scope=regional plus job_locations;
+  search explicit '"first hire" OR "first employee"' descriptions. A first GTM
+  hire is a functional hire, not a first employee in a new country.
+- Software roles: role_scope=software narrows titles; subcategories filters the
+  COMPANY sector and is separate. Generic 'engineers' may include hardware.
+- If the user asks for companies, return names, roles and sources immediately;
+  count=true is only a preliminary free count, never the completed answer.
+- Use verify_live=true for final vacancy shortlists where supported; include
+  unknown/closed/conflicting status. Indexed-open is not independently live.
 
 What a good answer looks like: a shortlist of named companies, each with the
 matching role(s), posting/source links, and one line on why it is a prospect

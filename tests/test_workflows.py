@@ -21,7 +21,7 @@ def call(name, arguments):
 def test_workflows_are_hr_only():
     classic = {t["name"] for t in entry._tools_for_profile("classic")}
     hr = {t["name"] for t in entry._tools_for_profile("hr")}
-    assert hr - classic == {"find_hiring_companies", "find_funded_hiring_companies", "find_hiring_outlook", "research_investor_activity"}
+    assert hr - classic == {"find_hiring_companies", "find_funded_hiring_companies", "find_hiring_outlook", "research_investor_activity", "find_recent_appointments"}
     response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "find_hiring_companies"}}, "key"))
     assert response["error"]["code"] == -32602
 
