@@ -1807,16 +1807,29 @@ async def _wf_fetch(endpoint, params, api_key, ledger):
     remaining = ledger.get("_deadline", time.monotonic() + 45) - time.monotonic()
     if remaining <= 0:
         raise WorkflowError("Workflow time budget reached; resume using the continuation fields.")
+    paid = not params.get("count")
+    if paid and ledger.get("_credit_limit") is not None:
+        reserved = ledger["credits_used"] + ledger.get("credits_reserved_unknown", 0) + ledger.get("_pending_credits", 0)
+        if reserved >= ledger["_credit_limit"]:
+            raise WorkflowError("Credit budget reached, including reservations for timed-out requests. No further paid call was made.")
+        ledger["_pending_credits"] = ledger.get("_pending_credits", 0) + 1
     ledger["api_calls"] += 1
     try:
         result = await asyncio.wait_for(_call_api(endpoint, params, api_key), timeout=min(40, remaining))
     except Exception as error:
+        if paid and ledger.get("_credit_limit") is not None:
+            ledger["_pending_credits"] -= 1
+            ledger["credits_reserved_unknown"] = ledger.get("credits_reserved_unknown", 0) + 1
         ledger["credits_known"] = False
         ledger["requests_with_unknown_cost"] = ledger.get("requests_with_unknown_cost", 0) + 1
         raise WorkflowError(f"Upstream request failed ({type(error).__name__}); no result inferred.") from error
     if isinstance(result, dict):
         usage_meta = result.get("meta") or ((result.get("body") or {}).get("meta") if isinstance(result.get("body"), dict) else {}) or {}
         ledger["credits_used"] += usage_meta.get("creditsUsed", 0)
+    if paid and ledger.get("_credit_limit") is not None:
+        ledger["_pending_credits"] -= 1
+        if not isinstance(result, dict) or "creditsUsed" not in usage_meta:
+            ledger["credits_reserved_unknown"] = ledger.get("credits_reserved_unknown", 0) + 1
     if not isinstance(result, dict) or result.get("error"):
         if not params.get("count") and (not isinstance(result, dict) or "creditsUsed" not in usage_meta):
             ledger["credits_known"] = False
@@ -2325,7 +2338,10 @@ def _wf_indexed_criteria(args):
     return [{"requirement": name, "status": "supported_indexed", "requested": args[name]} for name in fields if args.get(name) is not None]
 
 
-def _wf_finalize_company(company, args):
+def _wf_finalize_company(company, args, brief=False):
+    if brief:
+        return _wf_finalize_brief_company(company, args)
+    company.pop("_source_claim_candidates", None)
     requested = _wf_strings(args.get("required_evidence"))
     supported = company.pop("_source_claims", {})
     live_open = [posting for posting in company["postings"] if posting.get("source_verified_open") is True]
@@ -2393,7 +2409,41 @@ def _wf_finalize_company(company, args):
     return company
 
 
-def _wf_company_results(rows, args):
+def _wf_finalize_brief_company(company, args):
+    """Opt-in qualification over eligible postings; never clear company flags."""
+    original = deepcopy(company)
+    full = _wf_finalize_company(deepcopy(company), args)
+    local_codes = {"job_identity_conflict", "source_work_mode_conflict", "source_posting_date_conflict"}
+    posting_flags = [f for f in full["screening"]["flags"] if f.get("code") in local_codes and f.get("posting_id") is not None]
+    bad_ids = {f["posting_id"] for f in posting_flags}
+    for posting in company["postings"]:
+        if posting.get("source_verified_open") is False:
+            bad_ids.add(posting.get("id"))
+            posting_flags.append({"posting_id":posting.get("id"), "code":"source_closed", "status":"needs_review"})
+    eligible = [p for p in original["postings"] if p.get("id") not in bad_ids]
+    original["postings"] = eligible
+    original["_source_claims"] = {k:v for k,v in original.get("_source_claims", {}).items() if v.get("posting_id") not in bad_ids}
+    for requirement, candidates in original.pop("_source_claim_candidates", {}).items():
+        for claim in candidates:
+            if claim.get("posting_id") not in bad_ids:
+                original["_source_claims"].setdefault(requirement, claim)
+                break
+    result = _wf_finalize_company(original, args)
+    minimum = args.get("min_distinct_role_titles", 1)
+    distinct = {str(p.get("title") or "").strip().casefold() for p in eligible}
+    if len(distinct) < minimum:
+        result["unverified_requirements"].append({"requirement":"eligible_distinct_roles", "status":"unknown", "requested":minimum, "observed":len(distinct), "reason":"Conflicting/closed postings cannot satisfy the requested number of roles."})
+        if result["screening"]["status"] != "needs_review":
+            result["match_status"] = "partial_evidence" if eligible else "needs_review"
+            result["qualification"] = "partial" if eligible else "requires_prospect_review"
+    result["postings"] = full["postings"]
+    result["posting_count_in_batch"] = len(full["postings"])
+    result["eligible_posting_ids"] = [p.get("id") for p in eligible]
+    result["posting_review"] = posting_flags
+    return result
+
+
+def _wf_company_results(rows, args, brief=False):
     companies = {}
     requested = _wf_strings(args.get("required_evidence"))
     for row in rows:
@@ -2423,6 +2473,8 @@ def _wf_company_results(rows, args):
             company["postings"].append({"id": row.get("id"), "title": html.unescape(row.get("title") or ""), "location": row.get("location"), "job_country": row.get("jobCountry"), "company_domain": domain, "company_name": row.get("companyName"), "posted": row.get("datePosted"), "valid_through": row.get("validThrough"), "url": row.get("jobUrl"), "open_status": "indexed_open", "indexed_open_as_of": args.get("as_of") or "request_time", "source_verified_open": None, **({"description_excerpt": excerpt} if excerpt else {}), **({"description_text": description} if args.get("verbose") else {})})
             for requirement, evidence in _wf_source_claims(row, requested, args).items():
                 company["_source_claims"].setdefault(requirement, evidence)
+                if brief:
+                    company.setdefault("_source_claim_candidates", {}).setdefault(requirement, []).append(evidence)
         for funding in row.get("matchedFunding") or []:
             if not any(f.get("signalId") == funding.get("signalId") for f in company["funding"]):
                 company["funding"].append(funding)
@@ -2703,12 +2755,47 @@ def _wf_titles_agree(left, right):
     return normalized(left) == normalized(right)
 
 
+def _wf_verification_candidates(companies, limit):
+    """Round-robin companies, direct ATS first; skip unsupported/duplicate URLs."""
+    queues = []
+    for company in companies:
+        queue = []
+        for posting in company["postings"]:
+            url = posting.get("url") or ""
+            target = _wf_ats_target(url)
+            if target or _wf_source_url_allowed(url):
+                queue.append((0 if target else 1, url, posting))
+        queue.sort(key=lambda item:item[0])
+        if queue:
+            queues.append((company, queue))
+    selected, seen = [], set()
+    while queues and len(selected) < limit:
+        remaining = []
+        for company, queue in queues:
+            while queue:
+                _, url, posting = queue.pop(0)
+                # Keep per-company identity checks independent, even when a
+                # misassociated URL appears at two employers. HTTP is cached.
+                identity = (id(company), url)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                selected.append((company, posting))
+                break
+            if queue:
+                remaining.append((company, queue))
+            if len(selected) >= limit:
+                break
+        queues = remaining
+    return selected
+
+
 async def _wf_verify_companies(companies, args, ledger):
     requested = set(_wf_strings(args.get("required_evidence")))
     if not args.get("verify_live") and "verified_live_vacancy" not in requested:
         return companies
     limit = _wf_int(args, "verification_limit", 10, 1, 50)
-    postings = [(company, posting) for company in companies for posting in company["postings"]][:limit]
+    postings = _wf_verification_candidates(companies, limit) if ledger.get("_brief") else [(company, posting) for company in companies for posting in company["postings"]][:limit]
     ledger["source_checks"] = len(postings)
     semaphore = asyncio.Semaphore(8)
     ledger["source_http_requests"] = 0
@@ -2859,9 +2946,9 @@ async def _wf_hiring(args, key, ledger, funded=False):
         page += 1
         if not has_more or ledger["api_calls"] >= ledger["max_api_calls"]:
             break
-    companies = _wf_company_results(rows, args)
+    companies = _wf_company_results(rows, args, brief=ledger.get("_brief", False))
     await _wf_verify_companies(companies, args, ledger)
-    companies = [_wf_finalize_company(company, args) for company in companies]
+    companies = [_wf_finalize_company(company, args, brief=ledger.get("_brief", False)) for company in companies]
     companies.sort(key=lambda company: company["screening"]["status"] == "needs_review")
     query_status = "partial" if has_more or start_page != 1 or errors else "complete"
     company_states = {company["match_status"] for company in companies}
@@ -3266,7 +3353,7 @@ def _wf_arg_hint(tool, arg):
     return hint.format(tool=tool) if hint else None
 
 
-async def _run_hr_workflow(name, args, api_key):
+async def _run_hr_workflow(name, args, api_key, brief=False, max_credits=None):
     args = dict(args)
     aliases = HIRING_ARG_ALIASES if name in {"find_hiring_companies", "find_funded_hiring_companies"} else {"investor_city":"investor_headquarters"} if name == "research_investor_activity" else {}
     applied = {}
@@ -3310,7 +3397,9 @@ async def _run_hr_workflow(name, args, api_key):
         raise WorkflowError("office_locations requires office_presence or office_opening in required_evidence; it is not a job-location filter")
     if name == "find_recent_appointments" and not args.get("role", "").strip():
         raise WorkflowError("role must not be blank")
-    ledger = {"api_calls": 0, "credits_used": 0, "max_api_calls": _wf_int(args, "max_api_calls", 12, 2, 30), "_deadline": time.monotonic() + 45}
+    ledger = {"api_calls": 0, "credits_used": 0, "max_api_calls": _wf_int(args, "max_api_calls", 12, 2, 30), "_deadline": time.monotonic() + 45, "_brief": brief}
+    if brief and max_credits is not None:
+        ledger["_credit_limit"] = max_credits
     try:
         if name == "find_recent_appointments":
             payload = await _wf_appointments(args, api_key, ledger)
@@ -3564,7 +3653,132 @@ def _hiring_outlook_prompt(args):
 _expose_api_filters(TOOLS)
 
 
+BRIEF_INSTRUCTIONS = """HR recruiting assistant. Preserve EVERY condition in the original request.
+Use four workflows: find_recent_appointments for people who joined a role;
+find_hiring_outlook for might/about-to-hire; research_investor_activity for investor
+participation; find_hiring_companies for vacancies, including funding intersections.
+An engineering vacancy is not a prediction or an appointment.
+
+Pass the original request in request and map its clauses to explicit filters.
+Do not invent roles: legal startups means company sector, not lawyer vacancies.
+Do not add engineers when the user did not specify a role.
+Use company_countries ONLY for HQ/origin restrictions; job_locations for work
+location. 'UK hiring' is jobs, not HQ. HQ city/metro is unsupported: label any
+alternative. Software role_scope and company subcategories are separate.
+
+Funding criteria actually filter when funding_within_days/funding_rounds or
+funding_investor_type is supplied. required_evidence marks claims needing proof;
+it does not secretly filter backing, startup status or future intent.
+For startup asks disclose measurable startup_definition (size/founding year) and
+retain startup_status as required_evidence. 'Recently funded' defaults to 90 days
+when funding_within_days=90 is supplied. VC/PE-backed without recency needs a
+disclosed wider historical lookback, not an invented current-stage requirement.
+Fresh appointments default to 30 days; never silently widen to a year.
+Multiple roles requires min_distinct_role_titles=2 in the requested date cohort.
+Scaling can use positive stored headcount growth; disclose the window/proxy.
+
+For Polish founders OR offices: required_evidence=[founder_origin,office_presence],
+required_evidence_any_of=[founder_origin,office_presence], office_locations=[Poland].
+Job location need not be Poland. Founder-only coverage is unknown. Office phrases
+such as '"Warsaw office" OR "office in Poland"' are targeted discovery, not full
+market coverage. First regional employee needs first_hire_scope=regional and its
+job_locations; first salesperson is not proof. Budgets/current stage stay unknown
+without explicit evidence. Never relax conditions to make a result look exact.
+
+Read execution_status before interpreting results. succeeded + page_complete=false
+means useful results with more pages, NOT a failed query. needs_review contains
+conflicts; prospects and alternatives must be named separately with URLs and
+their caveats. Live-open does not establish every other condition. If a call fails,
+use error guidance and a bounded retry; preserve successful results already obtained.
+Do not report 'no results' when a successful response contains candidates.
+Return a concise shortlist with original requirement, evidence and precise missing
+conditions. No invented names, contacts, dates, founder nationality or probabilities.
+The detailed /v2 interface remains available; this /v2/brief profile is opt-in.
+"""
+
+
+BRIEF_NAMES = ("find_recent_appointments", "find_hiring_companies", "find_hiring_outlook", "research_investor_activity")
+BRIEF_TOOL_HELP = {
+    "find_recent_appointments":"People appointed to a role, not vacancies. Example: role=cfo, sector=fmcg. Fresh defaults to 30 days.",
+    "find_hiring_companies":"Current vacancies. Optional funding filters join before pagination. Preserve HQ versus job location and all original constraints. Returns named prospects, alternatives and review items.",
+    "find_hiring_outlook":"Potential company-level hiring after recent triggers. Not a specific future role or individual probability. HQ metro is unsupported; useful alternatives are labelled.",
+    "research_investor_activity":"Investor HQ plus observed participation in company funding rounds. Participation is not leadership or ownership.",
+}
+
+
+def _brief_tools():
+    hidden = {"verbose", "count", "include_total", "max_pages", "required_evidence_mode", *HIRING_ARG_ALIASES, "investor_city"}
+    result = []
+    for name in BRIEF_NAMES:
+        tool = deepcopy(next(t for t in HR_WORKFLOW_TOOLS if t["name"] == name))
+        tool["description"] = BRIEF_TOOL_HELP[name]
+        schema = tool["inputSchema"]
+        props = {k:v for k,v in schema["properties"].items() if k not in hidden}
+        for value in props.values():
+            # Preserve types/limits/enums. Concise lead sentences retain the
+            # parameter meaning; cross-field cautions live in initialization.
+            value["description"] = value.get("description", "").split(". ")[0]
+        props["request"] = _wf_prop("string", "Original user request, unchanged. Returned beside interpreted filters.", minLength=1, maxLength=4000)
+        props["max_credits"] = _wf_prop("integer", "Paid-call cap, including conservative reservations for timeouts. Counts and public-source checks are free.", minimum=0, maximum=30)
+        schema["properties"] = props
+        schema["required"] = list(dict.fromkeys(["request", *schema.get("required", [])]))
+        if name == "research_investor_activity":
+            schema.pop("anyOf", None)
+            schema["required"].append("investor_headquarters")
+        result.append(tool)
+    return result
+
+
+def _brief_company_card(company):
+    eligible = set(company.get("eligible_posting_ids", [p.get("id") for p in company["postings"]]))
+    postings = sorted(company["postings"], key=lambda p:(p.get("id") not in eligible, p.get("source_verified_open") is not True))
+    compact = []
+    for posting in postings:
+        verification = posting.get("source_verification") or {}
+        compact.append({"id":posting.get("id"), "role":posting.get("title"), "location":posting.get("location"), "posted":posting.get("posted"), "url":posting.get("url"),
+                        "eligible":posting.get("id") in eligible, "live_open":posting.get("source_verified_open"),
+                        "source":{k:verification[k] for k in ("status","canonical_url","location","published_at","workplace_type","is_remote","reason") if k in verification}})
+    return {"company":company["company"], "domain":company.get("domain"), "hq_country":company.get("hq_country"), "headcount":company.get("headcount"),
+            "headcount_precision":"stored_or_estimated", "industry":company.get("industry"), "founded_year":company.get("founded_year"), "growth_info":company.get("growth_info"),
+            "qualification":company["qualification"], "match_status":company["match_status"], "postings":compact,
+            "supported_claims":[c for c in company["criteria"] if str(c.get("status", "")).startswith("supported_source")],
+            "unmet":company["unverified_requirements"], "logic":company.get("criteria_logic"), "company_review":company["screening"]["flags"], "posting_review":company.get("posting_review", []),
+            "funding":company.get("funding", []), "funding_review":company.get("funding_evidence_review", [])}
+
+
+def _brief_response(payload, request, args):
+    status = payload.get("query_status", payload.get("status"))
+    result = {"execution_status":"unsupported" if status == "unsupported" else "partial_failure" if payload.get("errors") else "succeeded",
+              "request":request, "interpreted_filters":payload.get("interpreted_query", args),
+              "query_status":status, "coverage":payload.get("coverage", {}), "usage":payload.get("usage", {}),
+              "unverified_requirements":payload.get("unverified_requirements", []), "errors":payload.get("errors", []),
+              "notice":"Indexed filters are not independent verification. More pages or unproved criteria are not execution failure. Never invent evidence to fill gaps."}
+    if "companies" in payload:
+        groups = {"prospects":[], "alternatives":[], "needs_review":[]}
+        for company in payload["companies"]:
+            state = company["match_status"]
+            group = "needs_review" if state == "needs_review" else "alternatives" if state == "partial_evidence" else "prospects"
+            groups[group].append(_brief_company_card(company))
+        for cards in groups.values():
+            cards.sort(key=lambda c:(-sum(p["live_open"] is True and p["eligible"] for p in c["postings"]), -len(c["supported_claims"])))
+        result.update(groups)
+        result["summary"] = {"returned_companies":len(payload["companies"]), **{k:len(v) for k,v in groups.items()}, "page_complete":payload.get("coverage", {}).get("complete_for_indexed_filters", False)}
+        if payload.get("alternatives"):
+            result["suggested_queries"] = payload["alternatives"]
+    else:
+        for key in ("appointments", "candidates", "investors", "matches", "investor_matches", "matched_investors", "alternatives", "next_step", "benchmark", "limitations", "interpretation", "coverage"):
+            if key in payload:
+                result[key] = payload[key]
+        # Keep non-hiring evidence intact: these workflows already have bounded
+        # records. Do not assume a common row key and lose investor links.
+        for key,value in payload.items():
+            result.setdefault(key,value)
+    return result
+
+
 def _tools_for_profile(profile):
+    if profile == "hr_brief":
+        return _brief_tools()
     if profile != "hr":
         return TOOLS
     tools = deepcopy(TOOLS)
@@ -3612,6 +3826,41 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         }
     else:
         params = raw_params
+
+    if profile == "hr_brief":
+        if method == "initialize":
+            return {"jsonrpc":"2.0", "id":req_id, "result":{"protocolVersion":PROTOCOL_VERSION, "capabilities":{"tools":{"listChanged":False}}, "serverInfo":{"name":"signalbase-recruiting-brief","version":"2.0.0"}, "instructions":BRIEF_INSTRUCTIONS}}
+        if method == "tools/list":
+            return {"jsonrpc":"2.0", "id":req_id, "result":{"tools":_brief_tools()}}
+        if method == "tools/call":
+            name = params.get("name")
+            descriptor = next((t for t in _brief_tools() if t["name"] == name), None)
+            if not descriptor:
+                return {"jsonrpc":"2.0", "id":req_id, "error":{"code":-32602,"message":"Unknown recruiting tool. Use tools/list; supply name and arguments."}}
+            try:
+                args = deepcopy(params.get("arguments", {}))
+                if not isinstance(args, dict):
+                    raise WorkflowError("arguments must be an object")
+                _validate_tool_arguments(descriptor, args, allow_unknown=False)
+                request = args.pop("request")
+                max_credits = args.pop("max_credits", None)
+                if not request.strip():
+                    raise WorkflowError("request must not be blank")
+                if len(request) > 4000:
+                    raise WorkflowError("request must be at most 4000 characters")
+                if not api_key:
+                    raise WorkflowError("No API key provided")
+                if name == "find_hiring_companies":
+                    args.setdefault("page_size", 10)
+                    args.setdefault("verify_live", True)
+                    args["include_total"] = False
+                payload = await _run_hr_workflow(name, args, api_key, brief=True, max_credits=max_credits)
+                compact = _brief_response(payload, request, args)
+                result = {"content":[{"type":"text","text":json.dumps(compact,ensure_ascii=False,default=str)}], "structuredContent":compact}
+            except (WorkflowError, ValueError) as error:
+                failure = {"execution_status":"failed", "message":str(error), "retry_guidance":"Correct only the invalid field; preserve all original constraints. Previous successful calls still contain usable evidence.", "usage":getattr(error,"usage",{"api_calls":0,"credits_used":0})}
+                result = {"isError":True,"content":[{"type":"text","text":json.dumps(failure)}],"structuredContent":failure}
+            return {"jsonrpc":"2.0", "id":req_id, "result":result}
 
     if method == "initialize":
         result = {
@@ -3829,7 +4078,8 @@ async def on_fetch(request, env):
             400,
         )
 
-    profile = "hr" if urlsplit(str(request.url)).path.rstrip("/") == "/v2" else "classic"
+    path = urlsplit(str(request.url)).path.rstrip("/")
+    profile = "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
     response, status = await _handle_body(body, api_key, profile)
     if status != 200:
         return _json_response(response, status)
