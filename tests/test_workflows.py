@@ -357,7 +357,7 @@ def test_investor_workflow_has_no_hidden_city_or_country_defaults(monkeypatch):
     assert missing["result"]["isError"] and "investor_headquarters is required" in missing["result"]["content"][0]["text"]
     assert calls == []
     tool = next(t for t in entry.HR_WORKFLOW_TOOLS if t["name"] == "research_investor_activity")
-    assert tool["inputSchema"]["required"] == ["investor_headquarters"]
+    assert tool["inputSchema"]["anyOf"] == [{"required":["investor_headquarters"]}, {"required":["investor_city"]}]
     result = call("research_investor_activity", {"investor_headquarters": "Berlin", "round_amount_min": 0, "as_of": "2026-09-10"})
     funding = calls[1][1]
     assert calls[0][1]["headquarters"] == "Berlin"

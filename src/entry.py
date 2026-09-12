@@ -3277,8 +3277,6 @@ async def _run_hr_workflow(name, args, api_key):
             raise WorkflowError(f"Conflicting {alias} and {canonical}; supply one value.")
         args[canonical] = args.pop(alias)
         applied[alias] = canonical
-    if name == "research_investor_activity" and "investor_headquarters" not in args:
-        raise WorkflowError("investor_headquarters (or its investor_city alias) is required")
     descriptor = next(t for t in HR_WORKFLOW_TOOLS if t["name"] == name)
     props = descriptor["inputSchema"]["properties"]
     if "count" not in props and args.get("count") is False:
@@ -3291,6 +3289,8 @@ async def _run_hr_workflow(name, args, api_key):
             f"Unknown {name} arguments: {', '.join(unknown)}. " + " ".join(hints)
             + (" " if hints else "") + "Accepted: " + ", ".join(props) + "."
         )
+    if name == "research_investor_activity" and "investor_headquarters" not in args:
+        raise WorkflowError("investor_headquarters is required (investor_city is also accepted as an alias)")
     for required in descriptor["inputSchema"].get("required", []):
         if required not in args:
             raise WorkflowError(f"{required} is required")
