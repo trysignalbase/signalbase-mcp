@@ -130,3 +130,61 @@ def test_office_evidence_filter_requires_its_evidence_claim(monkeypatch):
 def test_third_party_business_description_is_not_employer_conflict():
     row={'companyName':'Widget Works','companyDescription':'We build defense and flight hardware.','descriptionText':'We integrate with Stripe. Stripe is a payments company.'}
     assert not entry._wf_screen_row(row,{})
+
+
+def test_raw_date_aliases_are_validated_and_applied_without_losing_filters(monkeypatch):
+    calls=[]
+    async def api(endpoint,params,key):
+        calls.append(params)
+        return {'success':True,'data':[{'id':'job','companyId':'co','descriptionText':'Full original job description.'}],'pagination':{'totalCount':1},'meta':{'creditsUsed':1}}
+    monkeypatch.setattr(entry,'_call_api',api)
+    args={'dateFrom':'2026-01-01','dateTo':'2026-04-30','open_as_of':'2026-09-12T00:00:00Z','verbose':True}
+    result=asyncio.run(entry._run_hr_workflow('find_hiring_companies',args,'key'))
+    assert calls[0]['dateFrom']=='2026-01-01' and calls[0]['dateTo']=='2026-04-30'
+    assert calls[0]['open_as_of']=='2026-09-12T00:00:00+00:00'
+    assert result['argument_aliases_applied']['dateFrom']=='posted_from'
+    assert result['companies'][0]['postings'][0]['description_text']=='Full original job description.'
+    assert args['dateFrom']=='2026-01-01'  # do not mutate caller input
+
+
+@pytest.mark.parametrize('arguments', [
+    {'dateFrom':'2026-01-01','posted_from':'2026-02-01'},
+    {'posted_min_days_ago':'31'},
+    {'posted_max_days_ago':-2},
+    {'verbose':'true'},
+])
+def test_alias_conflicts_and_invalid_values_make_no_calls(monkeypatch,arguments):
+    async def api(*args):raise AssertionError('No paid call for invalid arguments')
+    monkeypatch.setattr(entry,'_call_api',api)
+    with pytest.raises((entry.WorkflowError,ValueError)):
+        asyncio.run(entry._run_hr_workflow('find_hiring_companies',arguments,'key'))
+
+
+def test_investor_city_alias_is_an_explicit_headquarters_filter(monkeypatch):
+    captured={}
+    async def investors(args,key,ledger):
+        captured.update(args)
+        return {'investors':[]}
+    monkeypatch.setattr(entry,'_wf_investors',investors)
+    result=asyncio.run(entry._run_hr_workflow('research_investor_activity',{'investor_city':'Toronto'},'key'))
+    assert captured['investor_headquarters']=='Toronto'
+    assert result['argument_aliases_applied']=={'investor_city':'investor_headquarters'}
+
+
+@pytest.mark.parametrize('source,expected', [
+    ({'workplace_type':'OnSite'},'source_work_mode_conflict'),
+    ({'is_remote':False},'source_work_mode_conflict'),
+    ({'published_at':'2026-07-01T00:00:00Z'},'source_posting_date_conflict'),
+    ({'is_remote':True,'published_at':'2026-09-10T00:00:00Z'},None),
+    ({},None),
+])
+def test_open_source_does_not_override_requested_work_mode_or_recency(source,expected):
+    args={'work_mode':'remote','posted_within_days':14,'as_of':'2026-09-12T00:00:00Z','required_evidence':['verified_live_vacancy']}
+    company=entry._wf_company_results([{'companyId':'c','id':'j','title':'Software Engineer','datePosted':'2026-09-11'}],args)[0]
+    company['postings'][0].update(source_verified_open=True,source_verification={'status':'open','canonical_url':'https://example.org/job',**source})
+    result=entry._wf_finalize_company(company,args)
+    if expected:
+        assert expected in [flag['code'] for flag in result['screening']['flags']]
+        assert result['match_status']=='needs_review'
+    else:assert result['match_status']=='supported_source_verified'
+    assert result['postings'][0]['source_verified_open'] is True

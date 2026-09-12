@@ -2373,6 +2373,16 @@ def _wf_finalize_company(company, args):
     for posting in company["postings"]:
         if posting.get("source_verification", {}).get("status") == "identity_conflict":
             flags.append({"code": "job_identity_conflict", "posting_id": posting.get("id"), "status": "needs_review"})
+        source = posting.get("source_verification") or {}
+        if posting.get("source_verified_open") is True:
+            workplace = re.sub(r"[^a-z]", "", str(source.get("workplace_type") or "").lower())
+            if args.get("work_mode") == "remote" and (source.get("is_remote") is False or workplace in {"onsite", "onlocation", "hybrid"}):
+                flags.append({"code":"source_work_mode_conflict", "posting_id":posting.get("id"), "status":"needs_review", "source_url":source.get("canonical_url"), "workplace_type":source.get("workplace_type"), "is_remote":source.get("is_remote"), "reason":"The employer source does not classify this vacancy as remote; indexed remote wording is insufficient."})
+            published = _wf_date(source.get("published_at"))
+            if published and any(args.get(k) is not None for k in ("posted_from", "posted_to", "posted_within_days", "posting_age_days_min")):
+                bounds = _wf_hiring_params(args)
+                if (bounds.get("dateFrom") and _wf_day(published) < bounds["dateFrom"]) or (bounds.get("dateTo") and _wf_day(published) > bounds["dateTo"]):
+                    flags.append({"code":"source_posting_date_conflict", "posting_id":posting.get("id"), "status":"needs_review", "source_url":source.get("canonical_url"), "source_published_at":source["published_at"], "indexed_posted":posting.get("posted"), "requested_from":bounds.get("dateFrom"), "requested_to":bounds.get("dateTo"), "reason":"Employer publication date is outside the requested window. The indexed date may be a repost; verify recency instead of treating it as a new vacancy."})
     company["screening"] = {"status": "needs_review" if flags else "no_detected_conflict", "flags": flags, "scope": "Returned batch only; absence of a flag is not independent verification."}
     if flags:
         company["match_status"] = "needs_review"
@@ -2407,7 +2417,7 @@ def _wf_company_results(rows, args):
             terms = re.findall(r"\w+", args.get("description_keywords") or "")
             first = min((description.lower().find(term.lower()) for term in terms if term.lower() in description.lower()), default=0)
             excerpt = description[max(0, first - 100):first + 400] if terms else None
-            company["postings"].append({"id": row.get("id"), "title": html.unescape(row.get("title") or ""), "location": row.get("location"), "job_country": row.get("jobCountry"), "company_domain": domain, "company_name": row.get("companyName"), "posted": row.get("datePosted"), "valid_through": row.get("validThrough"), "url": row.get("jobUrl"), "open_status": "indexed_open", "indexed_open_as_of": args.get("as_of") or "request_time", "source_verified_open": None, **({"description_excerpt": excerpt} if excerpt else {})})
+            company["postings"].append({"id": row.get("id"), "title": html.unescape(row.get("title") or ""), "location": row.get("location"), "job_country": row.get("jobCountry"), "company_domain": domain, "company_name": row.get("companyName"), "posted": row.get("datePosted"), "valid_through": row.get("validThrough"), "url": row.get("jobUrl"), "open_status": "indexed_open", "indexed_open_as_of": args.get("as_of") or "request_time", "source_verified_open": None, **({"description_excerpt": excerpt} if excerpt else {}), **({"description_text": description} if args.get("verbose") else {})})
             for requirement, evidence in _wf_source_claims(row, requested, args).items():
                 company["_source_claims"].setdefault(requirement, evidence)
         for funding in row.get("matchedFunding") or []:
@@ -2666,6 +2676,8 @@ async def _wf_verify_live_posting(posting, public_cache=None):
         "canonical_url": matched.get("absolute_url") or matched.get("hostedUrl") or matched.get("jobUrl"),
         "apply_url": matched.get("applyUrl") or matched.get("apply_url"),
         "workplace_type": matched.get("workplaceType") or matched.get("workplace_type"),
+        "is_remote": matched.get("isRemote") if isinstance(matched.get("isRemote"), bool) else None,
+        "published_at": matched.get("publishedAt") if _wf_date(matched.get("publishedAt")) else None,
         "location": location,
     }
     offices = matched.get("offices") or []
@@ -3144,6 +3156,7 @@ def _wf_prop(kind, description, **extra):
 
 
 WF_COMMON_PROPS = {
+    "verbose": _wf_prop("boolean", "Hiring workflows: include full indexed posting descriptions. Other workflows already return their structured evidence and this flag has no additional effect. Does not verify sources or make extra calls."),
     "company_countries": _wf_prop("array", "Company HQ countries/regions. Leave empty unless the user restricts where companies are headquartered; places the user lists for the job itself go in job_locations only.", items={"type": "string"}),
     "company_hq_city": _wf_prop("string", "Only if HQ city/metro is a hard requirement. Currently returns unsupported; never substitutes job location."),
     "role": _wf_prop("string", "Role or alternatives: bdr, engineers, bdr or engineers, GTM, GTM engineer, CFO."),
@@ -3196,6 +3209,11 @@ WF_HIRING_PROPS = {
 }
 
 
+HIRING_ARG_ALIASES = {"dateFrom":"posted_from", "dateTo":"posted_to", "posted_min_days_ago":"posting_age_days_min", "posted_max_days_ago":"posted_within_days", "open_as_of":"as_of"}
+for alias, canonical in HIRING_ARG_ALIASES.items():
+    WF_HIRING_PROPS[alias] = {**WF_HIRING_PROPS[canonical], "description": f"Compatibility alias of {canonical}; do not supply conflicting values for both names."}
+
+
 def _wf_tool(name, description, properties, required=()):
     schema = {"type": "object", "properties": properties, "additionalProperties": False}
     if required:
@@ -3206,7 +3224,7 @@ def _wf_tool(name, description, properties, required=()):
 
 HR_WORKFLOW_TOOLS = [
     _wf_tool("find_recent_appointments", "Find PEOPLE newly appointed to a role, not employers advertising vacancies. Use for 'freshly appointed CFOs in FMCG'. Returns named people, employer, role, announcement/start dates and source evidence. Do not use for 'companies hiring a new CFO', which asks for vacancies.", {
-        **{k: WF_HIRING_PROPS[k] for k in ("role", "sector", "as_of", "max_api_calls", "page", "page_size")},
+        **{k: WF_HIRING_PROPS[k] for k in ("role", "sector", "as_of", "max_api_calls", "page", "page_size", "verbose")},
         "appointed_within_days": _wf_prop("integer", "Announcement recency, default 30 days. Does not prove when employment started.", minimum=0, maximum=3650),
     }, required=["role"]),
     _wf_tool("find_hiring_companies", "Find companies with indexed open roles using explicit HQ/job geography, employee size, growth, caller-defined startup rules, posting age and optional funding criteria. Returns per-criterion evidence, independent query/match/evidence status and honest pagination. Can quote explicit employer claims and live-check allowlisted public ATS sources. Prefer over assembling generic searches.", WF_HIRING_PROPS),
@@ -3216,7 +3234,14 @@ HR_WORKFLOW_TOOLS = [
 ]
 
 
+next(t for t in HR_WORKFLOW_TOOLS if t["name"] == "research_investor_activity")["inputSchema"]["properties"].update({
+    "investor_city": _wf_prop("string", "Compatibility alias of investor_headquarters; never provide conflicting values."),
+    "verbose": WF_COMMON_PROPS["verbose"],
+})
+
+
 WORKFLOW_ARG_HINTS = {
+    "page_size": "find_hiring_outlook uses max_companies (1-10) to bound candidates, not a source page_size. Remove page_size and set max_companies if needed.",
     "count": "{tool} has no count mode: it returns a bounded evidence batch. Remove count.",
     "countries": "Use company_countries for company HQ and job_locations for where the job is.",
     "job_countries": "Use job_locations for where the job is.",
@@ -3236,6 +3261,16 @@ def _wf_arg_hint(tool, arg):
 
 
 async def _run_hr_workflow(name, args, api_key):
+    args = dict(args)
+    aliases = HIRING_ARG_ALIASES if name in {"find_hiring_companies", "find_funded_hiring_companies"} else {"investor_city":"investor_headquarters"} if name == "research_investor_activity" else {}
+    applied = {}
+    for alias, canonical in aliases.items():
+        if alias not in args:
+            continue
+        if canonical in args and args[canonical] != args[alias]:
+            raise WorkflowError(f"Conflicting {alias} and {canonical}; supply one value.")
+        args[canonical] = args.pop(alias)
+        applied[alias] = canonical
     descriptor = next(t for t in HR_WORKFLOW_TOOLS if t["name"] == name)
     props = descriptor["inputSchema"]["properties"]
     if "count" not in props and args.get("count") is False:
@@ -3278,6 +3313,8 @@ async def _run_hr_workflow(name, args, api_key):
         else:
             payload = await _wf_hiring(args, api_key, ledger, name == "find_funded_hiring_companies")
         payload["usage"] = {k: v for k, v in ledger.items() if not k.startswith("_")}
+        if applied:
+            payload["argument_aliases_applied"] = applied
         payload.setdefault("unverified_requirements", _wf_requirements(args))
         return payload
     except WorkflowError as error:
@@ -3454,7 +3491,9 @@ presets retain history; include_expired=true is also available. Results always r
 from the current page. Grouping merges titles and does not count individual vacancies.
 Pagination still counts postings; check hasNextPage and deduplicate companies by domain.
 
-Responses are compact by default; verbose=true returns all text and source fields.
+Raw search responses are compact by default; verbose=true returns their full text
+and source fields. Hiring workflows accept verbose=true for full job descriptions;
+other workflows already include their structured evidence.
 Use jobUrl and source links as evidence. Do not invent roles, contacts or personal
 identities when absent from the data. Country names, ISO codes and regions are accepted;
 NORTH_AMERICA is the region and NA is Namibia. Unknown countries return a tool error
