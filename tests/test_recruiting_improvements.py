@@ -36,7 +36,7 @@ def test_workflow_to_api_keeps_multiplicity_dates_and_hq(monkeypatch):
     assert result['unverified_requirements'][0]['requirement']=='verified_live_vacancy'
 
 
-@pytest.mark.parametrize('arguments', [{'role':'cfo','sector':'bad'}, {'role':'cfo','appointed_within_days':-1}, {'role':'cfo','company_countries':['US']}])
+@pytest.mark.parametrize('arguments', [{'role':'cfo','sector':'bad'}, {'role':'cfo','appointed_within_days':-1}, {'role':'cfo','company_countries':['US']}, {'role':'   '}])
 def test_invalid_appointment_arguments_make_no_calls(monkeypatch,arguments):
     async def api(*args):raise AssertionError('No paid I/O')
     monkeypatch.setattr(entry,'_call_api',api)
@@ -118,3 +118,15 @@ def test_or_subgroup_does_not_waive_other_hard_requirements():
     company=entry._wf_finalize_company(entry._wf_company_results([row],args)[0],args)
     assert company['match_status']=='partial_evidence'
     assert company['qualification']=='partial'
+
+
+def test_office_evidence_filter_requires_its_evidence_claim(monkeypatch):
+    async def api(*args):raise AssertionError('No I/O for dropped constraints')
+    monkeypatch.setattr(entry,'_call_api',api)
+    with pytest.raises(entry.WorkflowError,match='office_locations requires'):
+        asyncio.run(entry._run_hr_workflow('find_hiring_companies',{'office_locations':['Poland']},'key'))
+
+
+def test_third_party_business_description_is_not_employer_conflict():
+    row={'companyName':'Widget Works','companyDescription':'We build defense and flight hardware.','descriptionText':'We integrate with Stripe. Stripe is a payments company.'}
+    assert not entry._wf_screen_row(row,{})

@@ -2270,6 +2270,9 @@ def _wf_employer_identity_flags(row):
     )
     for profile_pattern, job_pattern in conflicts:
         a, b = re.search(profile_pattern,profile,re.I), re.search(job_pattern,job,re.I)
+        named_subject = re.match(r"(\w+) is\b", b.group(0), re.I) if b else None
+        if named_subject and not _wf_names_compatible(name, named_subject[1]):
+            continue
         if a and b:
             flags.append({"code":"employer_business_conflict","status":"needs_review","indexed_company":name,"profile_quote":_wf_sentence(profile,a.start(),a.end()),"job_quote":_wf_sentence(job,b.start(),b.end()),"source_url":row.get("jobUrl"),"reason":"The job's employer self-description conflicts with the indexed company business; check the company association."})
             break
@@ -3260,6 +3263,10 @@ async def _run_hr_workflow(name, args, api_key):
         raise WorkflowError("first_hire_scope=regional requires job_locations")
     if args.get("required_evidence_any_of") and not set(args["required_evidence_any_of"]).issubset(args.get("required_evidence") or []):
         raise WorkflowError("required_evidence_any_of must be a subset of required_evidence")
+    if args.get("office_locations") and not {"office_presence", "office_opening"}.intersection(args.get("required_evidence") or []):
+        raise WorkflowError("office_locations requires office_presence or office_opening in required_evidence; it is not a job-location filter")
+    if name == "find_recent_appointments" and not args.get("role", "").strip():
+        raise WorkflowError("role must not be blank")
     ledger = {"api_calls": 0, "credits_used": 0, "max_api_calls": _wf_int(args, "max_api_calls", 12, 2, 30), "_deadline": time.monotonic() + 45}
     try:
         if name == "find_recent_appointments":
