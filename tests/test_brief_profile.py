@@ -163,3 +163,12 @@ def test_eligible_ats_office_claim_survives_an_old_indexed_claim(monkeypatch):
     result=entry._wf_finalize_company(companies[0],args,brief=True)
     claim=next(c for c in result['criteria'] if c['requirement']=='office_presence')
     assert claim['posting_id']=='good' and claim['status']=='supported_source_verified'
+
+
+def test_brief_retains_identity_conflict_evidence_and_employer_url():
+    company=mixed_company({})
+    company['postings'][0]['source_verification']={'status':'identity_conflict','reason':'source_title_differs','source_title':'Sales Engineer','resolved_url':'https://jobs.ashbyhq.com/a/source','checked_at':'2026-09-12'}
+    card=entry._brief_company_card(entry._wf_finalize_company(company,{},brief=True))
+    source=next(p['source'] for p in card['postings'] if p['id']=='good')
+    assert source['source_title']=='Sales Engineer'
+    assert source['resolved_url']=='https://jobs.ashbyhq.com/a/source'

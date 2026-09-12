@@ -3742,7 +3742,7 @@ def _brief_company_card(company):
         verification = posting.get("source_verification") or {}
         compact.append({"id":posting.get("id"), "role":posting.get("title"), "location":posting.get("location"), "posted":posting.get("posted"), "url":posting.get("url"),
                         "eligible":posting.get("id") in eligible, "live_open":posting.get("source_verified_open"),
-                        "source":{k:verification[k] for k in ("status","canonical_url","location","published_at","workplace_type","is_remote","reason") if k in verification}})
+                        "source":{k:verification[k] for k in ("status","canonical_url","resolved_url","source_title","source_employer","checked_at","method","location","published_at","workplace_type","is_remote","reason") if k in verification}})
     return {"company":company["company"], "domain":company.get("domain"), "hq_country":company.get("hq_country"), "headcount":company.get("headcount"),
             "headcount_precision":"stored_or_estimated", "industry":company.get("industry"), "founded_year":company.get("founded_year"), "growth_info":company.get("growth_info"),
             "qualification":company["qualification"], "match_status":company["match_status"], "postings":compact,
