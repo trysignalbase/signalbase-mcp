@@ -138,3 +138,14 @@ def test_later_eligible_posting_recovers_its_own_office_evidence():
     assert result['match_status']=='supported_with_source_text'
     claim=next(c for c in result['criteria'] if c['requirement']=='office_presence')
     assert claim['posting_id']=='good'
+
+
+def test_brief_hq_alternatives_are_executable_brief_tools():
+    r=asyncio.run(entry._handle_jsonrpc({'id':1,'method':'tools/call','params':{'name':'find_hiring_companies','arguments':{'request':'Bay Area Seed engineers','role':'engineers','company_hq_city':'San Francisco Bay Area','funding_rounds':['Seed']}}},'key','hr_brief'))
+    p=r['result']['structuredContent']
+    alternative=p['suggested_queries'][0]
+    assert alternative['tool']=='find_hiring_companies'
+    descriptor=next(t for t in entry._brief_tools() if t['name']==alternative['tool'])
+    entry._validate_tool_arguments(descriptor,alternative['arguments'])
+    assert alternative['arguments']['funding_rounds']==['Seed']
+    assert alternative['arguments']['request']=='Bay Area Seed engineers'

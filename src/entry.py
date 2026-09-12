@@ -3746,6 +3746,21 @@ def _brief_company_card(company):
             "funding":company.get("funding", []), "funding_review":company.get("funding_evidence_review", [])}
 
 
+def _brief_suggestions(suggestions, request):
+    converted = []
+    for suggestion in suggestions:
+        name = suggestion.get("tool")
+        if name == "find_funded_hiring_companies":
+            name = "find_hiring_companies"
+        tool = next((t for t in _brief_tools() if t["name"] == name), None)
+        if tool:
+            allowed = tool["inputSchema"]["properties"]
+            converted.append({**suggestion, "tool":name, "arguments":{**{k:v for k,v in suggestion.get("arguments", {}).items() if k in allowed}, "request":request}, "interface":"/v2/brief"})
+        else:
+            converted.append({**suggestion, "interface":"/v2 (detailed tools only)"})
+    return converted
+
+
 def _brief_response(payload, request, args):
     status = payload.get("query_status", payload.get("status"))
     result = {"execution_status":"unsupported" if status == "unsupported" else "partial_failure" if payload.get("errors") else "succeeded",
@@ -3764,7 +3779,7 @@ def _brief_response(payload, request, args):
         result.update(groups)
         result["summary"] = {"returned_companies":len(payload["companies"]), **{k:len(v) for k,v in groups.items()}, "page_complete":payload.get("coverage", {}).get("complete_for_indexed_filters", False)}
         if payload.get("alternatives"):
-            result["suggested_queries"] = payload["alternatives"]
+            result["suggested_queries"] = _brief_suggestions(payload["alternatives"], request)
     else:
         for key in ("appointments", "candidates", "investors", "matches", "investor_matches", "matched_investors", "alternatives", "next_step", "benchmark", "limitations", "interpretation", "coverage"):
             if key in payload:
@@ -3773,6 +3788,8 @@ def _brief_response(payload, request, args):
         # records. Do not assume a common row key and lose investor links.
         for key,value in payload.items():
             result.setdefault(key,value)
+        if payload.get("alternatives"):
+            result["alternatives"] = _brief_suggestions(payload["alternatives"], request)
     return result
 
 
