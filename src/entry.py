@@ -2424,9 +2424,11 @@ def _wf_finalize_brief_company(company, args):
     original["postings"] = eligible
     original["_source_claims"] = {k:v for k,v in original.get("_source_claims", {}).items() if v.get("posting_id") not in bad_ids}
     for requirement, candidates in original.pop("_source_claim_candidates", {}).items():
-        for claim in candidates:
+        for claim in sorted(candidates, key=lambda c:c.get("status") != "supported_source_verified"):
             if claim.get("posting_id") not in bad_ids:
-                original["_source_claims"].setdefault(requirement, claim)
+                current = original["_source_claims"].get(requirement)
+                if not current or claim.get("status") == "supported_source_verified":
+                    original["_source_claims"][requirement] = claim
                 break
     result = _wf_finalize_company(original, args)
     minimum = args.get("min_distinct_role_titles", 1)
@@ -2831,11 +2833,14 @@ async def _wf_verify_companies(companies, args, ledger):
             posting["open_status"] = "source_closed_or_removed"
         offices = (result.get("source_verification") or {}).get("offices") or []
         if offices and "office_presence" in requested and _wf_office_place_matches(" ".join(offices), args, posting.get("location")):
-            company["_source_claims"].setdefault("office_presence", {
+            claim = {
                 "requirement": "office_presence", "status": "supported_source_verified",
                 "offices": offices, "posting_id": posting.get("id"), "source_url": posting.get("url"),
                 "qualification": "The employer's public ATS record explicitly associates the posting with these offices.",
-            })
+            }
+            company["_source_claims"].setdefault("office_presence", claim)
+            if ledger.get("_brief"):
+                company.setdefault("_source_claim_candidates", {}).setdefault("office_presence", []).append(claim)
     ledger["source_verified_postings"] = sum(posting.get("source_verified_open") is True for _, posting in postings)
     ledger["source_resolved_postings"] = sum(bool(posting.get("source_verification", {}).get("resolved_url")) for _, posting in postings)
     return companies

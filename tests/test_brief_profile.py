@@ -149,3 +149,17 @@ def test_brief_hq_alternatives_are_executable_brief_tools():
     entry._validate_tool_arguments(descriptor,alternative['arguments'])
     assert alternative['arguments']['funding_rounds']==['Seed']
     assert alternative['arguments']['request']=='Bay Area Seed engineers'
+
+
+def test_eligible_ats_office_claim_survives_an_old_indexed_claim(monkeypatch):
+    args={'required_evidence':['office_presence'],'office_locations':['Poland'],'verify_live':True,'posted_within_days':14,'as_of':'2026-09-12'}
+    rr=rows()
+    rr[0].update(id='old',descriptionText='Our office is in Warsaw.',jobUrl='https://jobs.ashbyhq.com/a/11111111-1111-4111-8111-111111111111')
+    rr[1].update(id='good',jobUrl='https://jobs.ashbyhq.com/a/22222222-2222-4222-8222-222222222222')
+    companies=entry._wf_company_results(rr,args,brief=True)
+    async def verify(posting,cache):return {'source_verified_open':True,'source_verification':{'status':'open','offices':['Warsaw'],'published_at':'2026-07-01' if posting['id']=='old' else '2026-09-10'}}
+    monkeypatch.setattr(entry,'_wf_verify_live_posting',verify)
+    asyncio.run(entry._wf_verify_companies(companies,args,{'_brief':True}))
+    result=entry._wf_finalize_company(companies[0],args,brief=True)
+    claim=next(c for c in result['criteria'] if c['requirement']=='office_presence')
+    assert claim['posting_id']=='good' and claim['status']=='supported_source_verified'
