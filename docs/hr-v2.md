@@ -4,6 +4,14 @@ HR MCP v2 adds four recruiting workflows to the six existing search tools. No ne
 account or API key is required. All operations use the existing API and data;
 historical records are not repaired or backfilled.
 
+Two smaller opt-in profiles are also available. `/v2/brief` preserves the original
+concise-card contract. `/v2/recruiting` is the versioned 2.1 projection: it returns
+the same candidate population in compact TextContent only, merges duplicate funding
+and review data by stable signal ID, shortens appointment excerpts, removes raw
+aliases, and hoists repeated caveats. Classic and `/v2` are unchanged; `/v2/brief`
+keeps its fields and structured-content shape while using compact JSON text and
+correcting duplicate requirement/unknown-cost bookkeeping.
+
 ## Workflow tools
 
 | Tool | Purpose |

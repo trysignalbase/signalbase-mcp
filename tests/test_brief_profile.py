@@ -41,6 +41,32 @@ def test_brief_is_opt_in_and_does_not_mutate_discovery():
     assert len(entry._tools_for_profile('classic'))==6
 
 
+def test_recruiting_profile_is_versioned_and_text_only(monkeypatch):
+    async def api(endpoint,params,key):
+        return {'data':[{'companyId':'a','id':'j','companyName':'Alpha','title':'Engineer','jobUrl':'https://example.org/j'}],
+                'pagination':{'totalCount':1,'hasNextPage':False},'meta':{'creditsUsed':1}}
+    monkeypatch.setattr(entry,'_call_api',api)
+    init=asyncio.run(entry._handle_jsonrpc({'id':1,'method':'initialize'},'key','hr_recruiting'))
+    assert init['result']['serverInfo']['version']=='2.1.0'
+    response=asyncio.run(entry._handle_jsonrpc({'id':1,'method':'tools/call','params':{'name':'find_hiring_companies','arguments':{'request':'Find engineers','role':'engineers','verify_live':False}}},'key','hr_recruiting'))
+    assert 'structuredContent' not in response['result']
+    payload=json.loads(response['result']['content'][0]['text'])
+    assert payload['summary']['returned_companies']==1
+    assert payload['prospects'][0]['postings'][0]['id']=='j'
+    assert payload['field_notes']['coverage'].startswith('index/query')
+
+
+def test_recruiting_projection_merges_duplicate_funding_evidence():
+    card={'company':'Alpha','postings':[],'qualification':'matches_indexed_filters','match_status':'supported_indexed',
+          'funding':[{'signalId':'f1','roundType':'seed','amount':12000000,'currency':'USD','sources':[{'url':'https://alpha.example/funding'}]}],
+          'funding_review':[{'signal_id':'f1','source_identity_status':'supported_by_company_domain','evidence_status':'supported'}]}
+    projected=entry._lean_company_card(card)
+    assert len(projected['funding'])==1
+    assert projected['funding'][0]['id']=='f1'
+    assert projected['funding'][0]['source_identity']=='supported_by_company_domain'
+    assert 'funding_review' not in projected
+
+
 def test_brief_keeps_good_posting_and_isolates_stale_posting():
     args={'posted_within_days':14,'as_of':'2026-09-12','required_evidence':['verified_live_vacancy']}
     result=entry._wf_finalize_company(mixed_company(args),args,brief=True)
@@ -86,6 +112,8 @@ def test_brief_summary_is_successful_even_with_one_review_candidate(monkeypatch)
     assert len(p['prospects'])==1 and len(p['needs_review'])==1
     assert p['request']=='Find engineers'
     assert result['result']['structuredContent']==p
+    assert '\n' not in result['result']['content'][0]['text']
+    assert '": ' not in result['result']['content'][0]['text']
 
 
 def test_brief_unknown_or_raw_tool_is_rejected_before_io(monkeypatch):
@@ -117,6 +145,16 @@ def test_brief_budget_allows_free_counts_and_known_zero_charge(monkeypatch):
     ledger={'api_calls':0,'credits_used':0,'max_api_calls':10,'_credit_limit':0}
     asyncio.run(entry._wf_fetch('/signals/hiring',{'count':True},'key',ledger))
     assert ledger['credits_used']==0 and ledger['api_calls']==1
+
+
+def test_brief_budget_reserves_success_with_unknown_credit_cost(monkeypatch):
+    async def api(*args):return {'data':[],'pagination':{}}
+    monkeypatch.setattr(entry,'_call_api',api)
+    ledger={'api_calls':0,'credits_used':0,'max_api_calls':10,'_credit_limit':1}
+    asyncio.run(entry._wf_fetch('/signals/hiring',{},'key',ledger))
+    assert ledger['credits_known'] is False
+    assert ledger['requests_with_unknown_cost']==1
+    assert ledger['credits_reserved_unknown']==1
 
 
 def test_discarded_posting_cannot_supply_office_claim():

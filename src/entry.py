@@ -1823,17 +1823,21 @@ async def _wf_fetch(endpoint, params, api_key, ledger):
         ledger["credits_known"] = False
         ledger["requests_with_unknown_cost"] = ledger.get("requests_with_unknown_cost", 0) + 1
         raise WorkflowError(f"Upstream request failed ({type(error).__name__}); no result inferred.") from error
+    usage_meta = {}
     if isinstance(result, dict):
         usage_meta = result.get("meta") or ((result.get("body") or {}).get("meta") if isinstance(result.get("body"), dict) else {}) or {}
-        ledger["credits_used"] += usage_meta.get("creditsUsed", 0)
+    reported_credits = usage_meta.get("creditsUsed")
+    credits_known = isinstance(reported_credits, (int, float)) and not isinstance(reported_credits, bool)
+    if credits_known:
+        ledger["credits_used"] += reported_credits
+    elif paid:
+        ledger["credits_known"] = False
+        ledger["requests_with_unknown_cost"] = ledger.get("requests_with_unknown_cost", 0) + 1
     if paid and ledger.get("_credit_limit") is not None:
         ledger["_pending_credits"] -= 1
-        if not isinstance(result, dict) or "creditsUsed" not in usage_meta:
+        if not credits_known:
             ledger["credits_reserved_unknown"] = ledger.get("credits_reserved_unknown", 0) + 1
     if not isinstance(result, dict) or result.get("error"):
-        if not params.get("count") and (not isinstance(result, dict) or "creditsUsed" not in usage_meta):
-            ledger["credits_known"] = False
-            ledger["requests_with_unknown_cost"] = ledger.get("requests_with_unknown_cost", 0) + 1
         raise WorkflowError(_format_api_error(result) if isinstance(result, dict) else "Unexpected API response")
     if not isinstance(result.get("pagination"), dict) or not isinstance(result.get("data"), list):
         raise WorkflowError("Unexpected API envelope; data and pagination are required.")
@@ -3093,7 +3097,7 @@ async def _wf_outlook(args, key, ledger):
             already_hiring.append({"company": trigger["company"], "domain": trigger["domain"], "reason": "Does not satisfy the operational quiet-company definition", "evidence": evidence})
             continue
         requirements = _wf_requirements(args)
-        if args.get("role"):
+        if args.get("role") and not any(item.get("requirement") == "role_specific_future_hire" for item in requirements):
             requirements.append({"requirement": "role_specific_future_hire", "status": "unknown", "requested": args["role"], "reason": UNOBSERVED_REQUIREMENTS["role_specific_future_hire"]})
         qualified.append({**trigger, "status": "potential_company_level_hiring", "triggers": triggers, "benchmark": {"floor": BENCHMARK_FLOORS[trigger["signal"]][horizon], "horizon_days_from_trigger": horizon, "window_end": _wf_day(signal_day + timedelta(days=horizon)), "source": "user_supplied_screenshot", "cohort_definition_and_sample_size": "unknown", "individual_probability": False, "combined_signals": False}, "quiet_evidence": evidence, "unverified_requirements": requirements})
     source_complete = all(not (r.get("pagination") or {}).get("hasNextPage") for _, r in sources)
@@ -3702,6 +3706,20 @@ The detailed /v2 interface remains available; this /v2/brief profile is opt-in.
 """
 
 
+RECRUITING_INSTRUCTIONS = """Recruiting research. Preserve every requested constraint and pass the original request unchanged.
+Use find_recent_appointments for people who joined roles, find_hiring_outlook for possible future hiring,
+research_investor_activity for investor participation, and find_hiring_companies for advertised vacancies.
+Use company_countries only for HQ/origin and job_locations only for work location. Never turn one into the other.
+Required evidence is not a hidden filter: keep unsupported founder, office, first-hire, budget, ownership,
+current-stage, startup, scaling, continuous-open, or future-role claims explicitly unknown.
+For startups, supply a disclosed startup_definition. For more than one month use 31 days. For multiple jobs use
+min_distinct_role_titles=2. Historical investor backing is not recent funding and participation is not leadership.
+Read execution_status and coverage. Name returned prospects, alternatives, and review items separately, with record IDs,
+links, supported facts, contradictions, and precise missing evidence. Never invent facts or call incomplete coverage empty.
+This /v2/recruiting profile is versioned: it returns the same candidates as /v2/brief in a lean TextContent-only shape.
+"""
+
+
 BRIEF_NAMES = ("find_recent_appointments", "find_hiring_companies", "find_hiring_outlook", "research_investor_activity")
 BRIEF_TOOL_HELP = {
     "find_recent_appointments":"People appointed to a role, not vacancies. Example: role=cfo, sector=fmcg. Fresh defaults to 30 days.",
@@ -3798,8 +3816,135 @@ def _brief_response(payload, request, args):
     return result
 
 
+def _lean_funding(card):
+    reviews = {item.get("signal_id"): item for item in card.get("funding_review", [])}
+    result = []
+    for item in card.get("funding", []):
+        signal_id = item.get("signalId")
+        review = reviews.get(signal_id, {})
+        sources = []
+        for source in item.get("sources", [])[:3]:
+            compact = {k: source.get(k) for k in ("url", "title", "publishedAt", "isPrimary") if source.get(k) is not None}
+            if compact:
+                sources.append(compact)
+        funding = {
+            "id": signal_id,
+            "round": item.get("roundType"),
+            "amount": item.get("amount"),
+            "currency": item.get("currency"),
+            "announced": item.get("announcedDate"),
+            "occurred_at": item.get("occurredAt"),
+            "stored_verification": item.get("verificationStatus"),
+            "source_identity": review.get("source_identity_status"),
+            "evidence_status": review.get("evidence_status") or item.get("evidenceStatus"),
+            "sources": sources,
+        }
+        result.append({k: v for k, v in funding.items() if v not in (None, [], {})})
+    known = {item.get("id") for item in result}
+    for signal_id, review in reviews.items():
+        if signal_id not in known:
+            result.append({k: v for k, v in {
+                "id": signal_id,
+                "stored_verification": review.get("stored_verification_status"),
+                "source_identity": review.get("source_identity_status"),
+                "evidence_status": review.get("evidence_status"),
+                "sources": review.get("sources", [])[:3],
+            }.items() if v not in (None, [], {})})
+    return result
+
+
+def _lean_company_card(card):
+    postings = []
+    for posting in card.get("postings", []):
+        source = {k: v for k, v in (posting.get("source") or {}).items() if v not in (None, "", [], {})}
+        item = {k: v for k, v in {
+            "id": posting.get("id"), "role": posting.get("role"), "location": posting.get("location"),
+            "posted": posting.get("posted"), "url": posting.get("url"), "eligible": posting.get("eligible"),
+            "live_open": posting.get("live_open"), "source": source,
+        }.items() if v not in (None, "", [], {})}
+        postings.append(item)
+    result = {k: v for k, v in {
+        "company": card.get("company"), "domain": card.get("domain"), "hq_country": card.get("hq_country"),
+        "headcount": card.get("headcount"), "industry": card.get("industry"), "founded_year": card.get("founded_year"),
+        "growth_info": card.get("growth_info"), "qualification": card.get("qualification"),
+        "match_status": card.get("match_status"), "postings": postings,
+        "supported_claims": card.get("supported_claims"), "unmet": card.get("unmet"),
+        "company_review": card.get("company_review"), "posting_review": card.get("posting_review"),
+        "funding": _lean_funding(card),
+    }.items() if v not in (None, "", [], {})}
+    return result
+
+
+def _lean_candidate(candidate):
+    result = {k: deepcopy(v) for k, v in candidate.items() if k not in {"triggers", "headcount_evidence", "source_evidence"}}
+    triggers = []
+    for trigger in candidate.get("triggers", []):
+        if trigger.get("record_id") == candidate.get("record_id"):
+            continue
+        triggers.append({k: trigger.get(k) for k in ("record_id", "signal", "signal_date", "sources") if trigger.get(k) not in (None, [], {})})
+    if triggers:
+        result["other_triggers"] = triggers
+    return result
+
+
+def _collect_urls(value, found=None):
+    found = found if found is not None else set()
+    if isinstance(value, dict):
+        for item in value.values():
+            _collect_urls(item, found)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_urls(item, found)
+    elif isinstance(value, str) and value.startswith(("http://", "https://")):
+        found.add(value)
+    return found
+
+
+def _lean_response(payload, request, args):
+    """Versioned projection: same candidates, less duplicate evidence and no raw aliases."""
+    full = _brief_response(payload, request, args)
+    keep = {
+        "execution_status", "request", "interpreted_filters", "query_status", "coverage", "usage",
+        "unverified_requirements", "errors", "summary", "suggested_queries", "next_step", "benchmark",
+        "limitations", "interpretation", "investors_without_matching_rounds", "investors_not_checked",
+        "rejected_rounds", "excluded_examples",
+    }
+    result = {key: deepcopy(value) for key, value in full.items() if key in keep and value not in (None, [], {}, "")}
+    for suggestion in result.get("suggested_queries", []):
+        if suggestion.get("interface") == "/v2/brief":
+            suggestion["interface"] = "/v2/recruiting"
+    result["field_notes"] = {
+        "headcount": "stored_or_estimated; not verified exact",
+        "indexed_open": "freshness heuristic unless live_open=true",
+        "coverage": "index/query coverage, not market-wide recall",
+    }
+    for key in ("prospects", "alternatives", "needs_review"):
+        if key in full:
+            result[key] = [_lean_company_card(card) for card in full[key]]
+    if full.get("appointments") is not None:
+        result["appointments"] = []
+        for appointment in full.get("appointments", []):
+            item = deepcopy(appointment)
+            if item.get("evidence_excerpt"):
+                item["evidence_excerpt"] = item["evidence_excerpt"][:320]
+            result["appointments"].append(item)
+    if full.get("candidates") is not None:
+        result["candidates"] = [_lean_candidate(candidate) for candidate in full.get("candidates", [])]
+    if full.get("investors_with_matching_rounds") is not None:
+        result["investors_with_matching_rounds"] = deepcopy(full.get("investors_with_matching_rounds", []))
+    if full.get("investors") is not None:
+        result["investor_profiles"] = [
+            {k: item.get(k) for k in ("id", "name", "headquarters", "type", "website", "linkedin") if item.get(k) not in (None, "", [], {})}
+            for item in full.get("investors", [])
+        ]
+    missing_urls = sorted(_collect_urls(full) - _collect_urls(result))
+    if missing_urls:
+        result["additional_source_urls"] = missing_urls
+    return result
+
+
 def _tools_for_profile(profile):
-    if profile == "hr_brief":
+    if profile in {"hr_brief", "hr_recruiting"}:
         return _brief_tools()
     if profile != "hr":
         return TOOLS
@@ -3849,9 +3994,10 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
     else:
         params = raw_params
 
-    if profile == "hr_brief":
+    if profile in {"hr_brief", "hr_recruiting"}:
         if method == "initialize":
-            return {"jsonrpc":"2.0", "id":req_id, "result":{"protocolVersion":PROTOCOL_VERSION, "capabilities":{"tools":{"listChanged":False}}, "serverInfo":{"name":"signalbase-recruiting-brief","version":"2.0.0"}, "instructions":BRIEF_INSTRUCTIONS}}
+            recruiting = profile == "hr_recruiting"
+            return {"jsonrpc":"2.0", "id":req_id, "result":{"protocolVersion":PROTOCOL_VERSION, "capabilities":{"tools":{"listChanged":False}}, "serverInfo":{"name":"signalbase-recruiting" if recruiting else "signalbase-recruiting-brief","version":"2.1.0" if recruiting else "2.0.0"}, "instructions":RECRUITING_INSTRUCTIONS if recruiting else BRIEF_INSTRUCTIONS}}
         if method == "tools/list":
             return {"jsonrpc":"2.0", "id":req_id, "result":{"tools":_brief_tools()}}
         if method == "tools/call":
@@ -3877,11 +4023,15 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
                     args.setdefault("verify_live", True)
                     args["include_total"] = False
                 payload = await _run_hr_workflow(name, args, api_key, brief=True, max_credits=max_credits)
-                compact = _brief_response(payload, request, args)
-                result = {"content":[{"type":"text","text":json.dumps(compact,ensure_ascii=False,default=str)}], "structuredContent":compact}
+                compact = _lean_response(payload, request, args) if profile == "hr_recruiting" else _brief_response(payload, request, args)
+                result = {"content":[{"type":"text","text":json.dumps(compact,separators=(",", ":"),ensure_ascii=False,default=str)}]}
+                if profile == "hr_brief":
+                    result["structuredContent"] = compact
             except (WorkflowError, ValueError) as error:
                 failure = {"execution_status":"failed", "message":str(error), "retry_guidance":"Correct only the invalid field; preserve all original constraints. Previous successful calls still contain usable evidence.", "usage":getattr(error,"usage",{"api_calls":0,"credits_used":0})}
-                result = {"isError":True,"content":[{"type":"text","text":json.dumps(failure)}],"structuredContent":failure}
+                result = {"isError":True,"content":[{"type":"text","text":json.dumps(failure,separators=(",", ":"))}]}
+                if profile == "hr_brief":
+                    result["structuredContent"] = failure
             return {"jsonrpc":"2.0", "id":req_id, "result":result}
 
     if method == "initialize":
@@ -4101,7 +4251,7 @@ async def on_fetch(request, env):
         )
 
     path = urlsplit(str(request.url)).path.rstrip("/")
-    profile = "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
+    profile = "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
     response, status = await _handle_body(body, api_key, profile)
     if status != 200:
         return _json_response(response, status)

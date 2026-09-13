@@ -77,6 +77,20 @@ def test_fetch_routes_profiles_without_changing_auth(monkeypatch, suffix, hr):
         assert data == payload
 
 
+def test_recruiting_path_routes_to_versioned_profile(monkeypatch):
+    async def body():
+        return json.dumps({"id": 9, "method": "initialize"})
+    monkeypatch.setattr(entry, "_json_response", lambda value, status=200: value)
+    request = SimpleNamespace(
+        url="https://mcp.example/v2/recruiting",
+        method="POST",
+        headers={"Authorization": "Bearer same-key"},
+        text=body,
+    )
+    result = asyncio.run(entry.on_fetch(request, None))
+    assert result["result"]["serverInfo"] == {"name": "signalbase-recruiting", "version": "2.1.0"}
+
+
 @pytest.mark.parametrize("history", [{"dateTo": "2025-03-31"}, {"date_preset": "last_year"}])
 def test_hr_history_and_explicit_overrides(history):
     params, _, _ = entry._prepare_tool_args(history, "search_hiring_signals", "hr")

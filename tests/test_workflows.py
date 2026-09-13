@@ -232,6 +232,20 @@ def test_outlook_checks_both_histories_and_does_not_add_benchmarks(monkeypatch):
     assert result["usage"]["credits_used"] == 2
 
 
+def test_outlook_does_not_duplicate_role_specific_future_hire_requirement(monkeypatch):
+    async def api(endpoint, params, key):
+        if endpoint == "/signals/funding":
+            return envelope([{"companyName": "A", "companyWebsite": "a.com", "roundType": "seed", "announcedDate": "2026-09-01", "signalId": "seed"}])
+        return envelope(total=0, paid=False)
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = call("find_hiring_outlook", {
+        "as_of": "2026-09-10", "role": "engineer", "funding_rounds": ["Seed"],
+        "required_evidence": ["role_specific_future_hire"],
+    })
+    requirements = result["candidates"][0]["unverified_requirements"]
+    assert [item["requirement"] for item in requirements].count("role_specific_future_hire") == 1
+
+
 def test_outlook_continuation_keeps_unchecked_candidates_on_same_source_page(monkeypatch):
     async def api(endpoint, params, key):
         if endpoint == "/signals/funding":

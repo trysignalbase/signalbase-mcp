@@ -4,24 +4,21 @@ A Model Context Protocol (MCP) server that proxies the [Signalbase API](https://
 
 ## Endpoints
 
-The same deployment serves two experiences, using the same API key:
+The same deployment serves four versioned experiences, using the same API key:
 
-| | Existing MCP | HR MCP v2 |
-|---|---|---|
-| Worker URL | `https://mcp.trysignalbase.com` | `https://mcp.trysignalbase.com/v2` |
-| Keyed URL for Cowork | `/api/mcp/c/<key>` | `/api/mcp/v2/c/<key>` |
-| Tool names and arguments | All original names/arguments retained | Four HR workflows plus the six original tools and recruiting prompts |
-| Responses | Full original payload and `data` rows | Compact text, grouped hiring companies and independent query/match/evidence status |
-| Improved matching | Automatic; unknown country literals remain accepted | Automatic; unknown countries return an actionable tool error |
-| Hiring freshness | History included as before | Open postings by default; historical end dates/calendar presets retain history |
-| Country count breakdown | Off unless requested | On for multi-country counts, up to six bounded probes |
+| | Existing MCP | HR MCP v2 | Recruiting brief | Recruiting v2.1 |
+|---|---|---|---|---|
+| Worker URL | `https://mcp.trysignalbase.com` | `https://mcp.trysignalbase.com/v2` | `/v2/brief` | `/v2/recruiting` |
+| Keyed URL for Cowork | `/api/mcp/c/<key>` | `/api/mcp/v2/c/<key>` | `/api/mcp/v2/brief/c/<key>` | `/api/mcp/v2/recruiting/c/<key>` |
+| Tool surface | Six original tools | Six original plus HR workflows/prompts | Four recruiting workflows | Same four recruiting workflows |
+| Responses | Full original payload | Compact text and company groups | Concise cards plus structured duplicate | Lean TextContent-only cards with canonical funding evidence |
 
 Existing users need no configuration changes to receive improved country, role and
 seniority matching. Tool names, argument aliases (including `personLinkedinUrl`),
 response types, pagination, authentication and the existing connection URLs remain
 stable. Better matching can change which results are returned.
 
-Connect HR users to `/v2` for the new experience; no per-call version flags are needed.
+Connect general HR users to `/v2`; use `/v2/brief` for the frozen concise contract or `/v2/recruiting` for the versioned lower-payload view. No per-call version flags are needed.
 Deploy the app and Worker changes before using the new keyed v2 route. Nothing in the
 classic setup automatically redirects existing integrations to v2.
 

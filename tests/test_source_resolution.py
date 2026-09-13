@@ -98,6 +98,17 @@ def test_http_timeout_without_usage_marks_credit_cost_unknown(monkeypatch):
     assert ledger['credits_known'] is False and ledger['requests_with_unknown_cost'] == 1
 
 
+def test_paid_success_without_usage_marks_credit_cost_unknown(monkeypatch):
+    async def api(endpoint, params, key):
+        return {'data': [], 'pagination': {'totalCount': 0, 'hasNextPage': False}}
+    monkeypatch.setattr(entry, '_call_api', api)
+    ledger = {'api_calls': 0, 'credits_used': 0, 'max_api_calls': 12}
+    asyncio.run(entry._wf_fetch('/signals/hiring', {}, 'key', ledger))
+    assert ledger['credits_used'] == 0
+    assert ledger['credits_known'] is False
+    assert ledger['requests_with_unknown_cost'] == 1
+
+
 def test_sales_engineer_is_flagged_only_for_software_specific_request():
     row = {'title':'Founding Sales Engineer'}
     assert entry._wf_screen_row(row, {'role':'software engineer'})[0]['code'] == 'adjacent_role'
