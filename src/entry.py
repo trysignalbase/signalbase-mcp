@@ -2927,6 +2927,83 @@ async def _wf_hiring(args, key, ledger, funded=False):
             tool = "find_funded_hiring_companies" if funded else "find_hiring_companies"
             result["next_step"] = f"Count only: no company is named yet. If the user asked for companies, call {tool} again with the same arguments and count omitted; it returns company groups with posting URLs (1 credit per page)."
         return result
+    if ledger.get("_recruiting"):
+        size = _wf_int(args, "page_size", 10, 1, 50)
+        minimum = _wf_int(args, "min_distinct_role_titles", 1, 1, 10)
+        company_params = {k: v for k, v in params.items() if k not in {"sort_by", "sort_order", "include_total", "workflow_evidence"}}
+        company_params.update({"companies_limit": size, "postings_per_company": max(3, minimum)})
+        if args.get("cursor"):
+            company_params["cursor"] = args["cursor"]
+        response = await _wf_fetch("/recruiting/hiring-companies", company_params, key, ledger)
+        rows = []
+        company_evidence = {}
+        for company in response.get("data") or []:
+            company_id = company.get("companyId")
+            evidence_key = _wf_domain(company) or f"name:{company.get('companyName')}"
+            company_evidence[evidence_key] = {
+                "company_id": company_id,
+                "posting_count_in_filtered_cohort": company.get("postingCount"),
+                "distinct_role_titles_in_filtered_cohort": company.get("distinctRoleTitles"),
+                "latest_posting_at": company.get("latestPostingAt"),
+                "company_first": True,
+            }
+            for posting in company.get("postings") or []:
+                rows.append({
+                    "companyId": company_id,
+                    "companyName": company.get("companyName"),
+                    "companyWebsite": company.get("companyWebsite"),
+                    "companyLinkedin": company.get("companyLinkedin"),
+                    "companyIndustry": company.get("companyIndustry"),
+                    "companyCountry": company.get("companyCountry"),
+                    "companyEmployeeCount": company.get("companyEmployeeCount"),
+                    "companyFoundedYear": company.get("companyFoundedYear"),
+                    "companySubcategory": company.get("companySubcategory"),
+                    "companyGrowthInfo": company.get("companyGrowthInfo"),
+                    "companyUpdatedAt": company.get("companyUpdatedAt"),
+                    "matchedFunding": company.get("matchedFunding") or [],
+                    "id": posting.get("id"),
+                    "jobUrl": posting.get("url"),
+                    "title": posting.get("role"),
+                    "location": posting.get("location"),
+                    "jobCountry": posting.get("job_country"),
+                    "datePosted": posting.get("posted"),
+                    "validThrough": posting.get("valid_through"),
+                    "descriptionText": posting.get("evidence_excerpt"),
+                })
+        companies = _wf_company_results(rows, args, brief=True)
+        await _wf_verify_companies(companies, args, ledger)
+        companies = [_wf_finalize_company(company, args, brief=True) for company in companies]
+        for company in companies:
+            evidence_key = company.get("domain") or f"name:{company.get('company')}"
+            company["company_first_evidence"] = company_evidence.get(evidence_key, {})
+        companies.sort(key=lambda company: company["screening"]["status"] == "needs_review")
+        pagination = response.get("pagination") or {}
+        has_more = bool(pagination.get("hasNextPage"))
+        states = {company["match_status"] for company in companies}
+        match_status = "no_matches" if not companies else (
+            "needs_review" if "needs_review" in states else
+            "partial_evidence" if "partial_evidence" in states else
+            "supported_source_verified" if "supported_source_verified" in states else
+            "supported_with_source_text" if "supported_with_source_text" in states else
+            "supported_indexed"
+        )
+        evidence_levels = {company["evidence_level"] for company in companies}
+        supported_for_all = set.intersection(*(
+            {item["requirement"] for item in company["criteria"] if str(item.get("status", "")).startswith("supported_source")}
+            for company in companies
+        )) if companies else set()
+        return {
+            "status": "partial" if has_more else "complete",
+            "query_status": "partial" if has_more else "complete",
+            "match_status": match_status,
+            "evidence_level": next(iter(evidence_levels)) if len(evidence_levels) == 1 else "mixed" if evidence_levels else "indexed",
+            "interpreted_query": company_params,
+            "companies": companies,
+            "unverified_requirements": _wf_requirements(args, supported_for_all),
+            "errors": [],
+            "screening_summary": {"companies_needing_review": sum(c["screening"]["status"] == "needs_review" for c in companies), "scope": "Company-first page; each company appears once per cursor page."},
+            "coverage": {"matching_postings": None, "rows_scanned": len(rows), "companies_returned": len(companies), "complete_for_indexed_filters": not has_more, "query_exhausted": not has_more, "next_cursor": pagination.get("nextCursor"), "company_groups_span_pages": False, "company_first": True, "funding_evidence_limit_per_company": 5},
+        }
     page = _wf_int(args, "page", 1, 1, 100000)
     start_page = page
     # One 50-row page by default: one credit and a payload a model can read;
@@ -3362,7 +3439,7 @@ def _wf_arg_hint(tool, arg):
     return hint.format(tool=tool) if hint else None
 
 
-async def _run_hr_workflow(name, args, api_key, brief=False, max_credits=None):
+async def _run_hr_workflow(name, args, api_key, brief=False, max_credits=None, recruiting=False):
     args = dict(args)
     aliases = HIRING_ARG_ALIASES if name in {"find_hiring_companies", "find_funded_hiring_companies"} else {"investor_city":"investor_headquarters"} if name == "research_investor_activity" else {}
     applied = {}
@@ -3374,7 +3451,11 @@ async def _run_hr_workflow(name, args, api_key, brief=False, max_credits=None):
         args[canonical] = args.pop(alias)
         applied[alias] = canonical
     descriptor = next(t for t in HR_WORKFLOW_TOOLS if t["name"] == name)
-    props = descriptor["inputSchema"]["properties"]
+    props = dict(descriptor["inputSchema"]["properties"])
+    if recruiting and name == "find_hiring_companies":
+        props["cursor"] = _wf_prop("string", "Opaque company continuation cursor from coverage.next_cursor.", minLength=1, maxLength=1000)
+        props["page_size"] = {**props["page_size"], "maximum": 50}
+        props["min_distinct_role_titles"] = {**props["min_distinct_role_titles"], "maximum": 10}
     if "count" not in props and args.get("count") is False:
         # "count": false asks for the default behaviour; nothing to reject.
         args = {k: v for k, v in args.items() if k != "count"}
@@ -3406,7 +3487,7 @@ async def _run_hr_workflow(name, args, api_key, brief=False, max_credits=None):
         raise WorkflowError("office_locations requires office_presence or office_opening in required_evidence; it is not a job-location filter")
     if name == "find_recent_appointments" and not args.get("role", "").strip():
         raise WorkflowError("role must not be blank")
-    ledger = {"api_calls": 0, "credits_used": 0, "max_api_calls": _wf_int(args, "max_api_calls", 12, 2, 30), "_deadline": time.monotonic() + 45, "_brief": brief}
+    ledger = {"api_calls": 0, "credits_used": 0, "max_api_calls": _wf_int(args, "max_api_calls", 12, 2, 30), "_deadline": time.monotonic() + 45, "_brief": brief, "_recruiting": recruiting}
     if brief and max_credits is not None:
         ledger["_credit_limit"] = max_credits
     try:
@@ -3716,7 +3797,7 @@ For startups, supply a disclosed startup_definition. For more than one month use
 min_distinct_role_titles=2. Historical investor backing is not recent funding and participation is not leadership.
 Read execution_status and coverage. Name returned prospects, alternatives, and review items separately, with record IDs,
 links, supported facts, contradictions, and precise missing evidence. Never invent facts or call incomplete coverage empty.
-This /v2/recruiting profile is versioned: it returns the same candidates as /v2/brief in a lean TextContent-only shape.
+This /v2/recruiting profile is versioned: vacancy searches use company-first retrieval and all tools return a lean TextContent-only shape.
 """
 
 
@@ -3752,6 +3833,18 @@ def _brief_tools():
     return result
 
 
+def _recruiting_tools():
+    result = _brief_tools()
+    hiring = next(tool for tool in result if tool["name"] == "find_hiring_companies")
+    props = hiring["inputSchema"]["properties"]
+    props.pop("page", None)
+    props["cursor"] = _wf_prop("string", "Opaque company continuation cursor from coverage.next_cursor.", minLength=1, maxLength=1000)
+    props["page_size"]["description"] = "Companies per page, default 10."
+    props["page_size"]["maximum"] = 50
+    props["min_distinct_role_titles"]["maximum"] = 10
+    return result
+
+
 def _brief_company_card(company):
     eligible = set(company.get("eligible_posting_ids", [p.get("id") for p in company["postings"]]))
     postings = sorted(company["postings"], key=lambda p:(p.get("id") not in eligible, p.get("source_verified_open") is not True))
@@ -3766,7 +3859,8 @@ def _brief_company_card(company):
             "qualification":company["qualification"], "match_status":company["match_status"], "postings":compact,
             "supported_claims":[c for c in company["criteria"] if str(c.get("status", "")).startswith("supported_source")],
             "unmet":company["unverified_requirements"], "logic":company.get("criteria_logic"), "company_review":company["screening"]["flags"], "posting_review":company.get("posting_review", []),
-            "funding":company.get("funding", []), "funding_review":company.get("funding_evidence_review", [])}
+            "funding":company.get("funding", []), "funding_review":company.get("funding_evidence_review", []),
+            "company_first_evidence":company.get("company_first_evidence")}
 
 
 def _brief_suggestions(suggestions, request):
@@ -3870,6 +3964,7 @@ def _lean_company_card(card):
         "match_status": card.get("match_status"), "postings": postings,
         "supported_claims": card.get("supported_claims"), "unmet": card.get("unmet"),
         "company_review": card.get("company_review"), "posting_review": card.get("posting_review"),
+        "company_first_evidence": card.get("company_first_evidence"),
         "funding": _lean_funding(card),
     }.items() if v not in (None, "", [], {})}
     return result
@@ -3881,7 +3976,15 @@ def _lean_candidate(candidate):
     for trigger in candidate.get("triggers", []):
         if trigger.get("record_id") == candidate.get("record_id"):
             continue
-        triggers.append({k: trigger.get(k) for k in ("record_id", "signal", "signal_date", "sources") if trigger.get(k) not in (None, [], {})})
+        compact = {k: deepcopy(trigger.get(k)) for k in ("record_id", "signal", "signal_date", "role", "stored_dates", "sources", "source_evidence") if trigger.get(k) not in (None, [], {})}
+        if trigger.get("funding"):
+            funding = trigger["funding"]
+            compact["funding"] = {
+                k: deepcopy(funding.get(k))
+                for k in ("round", "amount", "currency", "investors", "verification_status", "source_identity_status")
+                if funding.get(k) not in (None, [], {})
+            }
+        triggers.append(compact)
     if triggers:
         result["other_triggers"] = triggers
     return result
@@ -3944,7 +4047,9 @@ def _lean_response(payload, request, args):
 
 
 def _tools_for_profile(profile):
-    if profile in {"hr_brief", "hr_recruiting"}:
+    if profile == "hr_recruiting":
+        return _recruiting_tools()
+    if profile == "hr_brief":
         return _brief_tools()
     if profile != "hr":
         return TOOLS
@@ -3999,10 +4104,11 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
             recruiting = profile == "hr_recruiting"
             return {"jsonrpc":"2.0", "id":req_id, "result":{"protocolVersion":PROTOCOL_VERSION, "capabilities":{"tools":{"listChanged":False}}, "serverInfo":{"name":"signalbase-recruiting" if recruiting else "signalbase-recruiting-brief","version":"2.1.0" if recruiting else "2.0.0"}, "instructions":RECRUITING_INSTRUCTIONS if recruiting else BRIEF_INSTRUCTIONS}}
         if method == "tools/list":
-            return {"jsonrpc":"2.0", "id":req_id, "result":{"tools":_brief_tools()}}
+            return {"jsonrpc":"2.0", "id":req_id, "result":{"tools":_recruiting_tools() if profile == "hr_recruiting" else _brief_tools()}}
         if method == "tools/call":
             name = params.get("name")
-            descriptor = next((t for t in _brief_tools() if t["name"] == name), None)
+            tools = _recruiting_tools() if profile == "hr_recruiting" else _brief_tools()
+            descriptor = next((t for t in tools if t["name"] == name), None)
             if not descriptor:
                 return {"jsonrpc":"2.0", "id":req_id, "error":{"code":-32602,"message":"Unknown recruiting tool. Use tools/list; supply name and arguments."}}
             try:
@@ -4022,7 +4128,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
                     args.setdefault("page_size", 10)
                     args.setdefault("verify_live", True)
                     args["include_total"] = False
-                payload = await _run_hr_workflow(name, args, api_key, brief=True, max_credits=max_credits)
+                payload = await _run_hr_workflow(name, args, api_key, brief=True, max_credits=max_credits, recruiting=profile == "hr_recruiting")
                 compact = _lean_response(payload, request, args) if profile == "hr_recruiting" else _brief_response(payload, request, args)
                 result = {"content":[{"type":"text","text":json.dumps(compact,separators=(",", ":"),ensure_ascii=False,default=str)}]}
                 if profile == "hr_brief":

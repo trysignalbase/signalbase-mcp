@@ -42,17 +42,26 @@ def test_brief_is_opt_in_and_does_not_mutate_discovery():
 
 
 def test_recruiting_profile_is_versioned_and_text_only(monkeypatch):
+    calls=[]
     async def api(endpoint,params,key):
-        return {'data':[{'companyId':'a','id':'j','companyName':'Alpha','title':'Engineer','jobUrl':'https://example.org/j'}],
-                'pagination':{'totalCount':1,'hasNextPage':False},'meta':{'creditsUsed':1}}
+        calls.append((endpoint,params))
+        return {'data':[{'companyId':'a','companyName':'Alpha','companyWebsite':'https://alpha.example','postingCount':2,'distinctRoleTitles':2,
+                         'postings':[{'id':'j','role':'Engineer','url':'https://example.org/j','evidence_excerpt':'Engineer evidence'}]}],
+                'pagination':{'nextCursor':'next-company','hasNextPage':True},'meta':{'creditsUsed':1}}
     monkeypatch.setattr(entry,'_call_api',api)
     init=asyncio.run(entry._handle_jsonrpc({'id':1,'method':'initialize'},'key','hr_recruiting'))
     assert init['result']['serverInfo']['version']=='2.1.0'
+    hiring=next(tool for tool in entry._tools_for_profile('hr_recruiting') if tool['name']=='find_hiring_companies')
+    assert 'cursor' in hiring['inputSchema']['properties'] and 'page' not in hiring['inputSchema']['properties']
     response=asyncio.run(entry._handle_jsonrpc({'id':1,'method':'tools/call','params':{'name':'find_hiring_companies','arguments':{'request':'Find engineers','role':'engineers','verify_live':False}}},'key','hr_recruiting'))
     assert 'structuredContent' not in response['result']
     payload=json.loads(response['result']['content'][0]['text'])
     assert payload['summary']['returned_companies']==1
     assert payload['prospects'][0]['postings'][0]['id']=='j'
+    assert payload['prospects'][0]['company_first_evidence']['distinct_role_titles_in_filtered_cohort']==2
+    assert payload['coverage']['next_cursor']=='next-company'
+    assert calls[0][0]=='/recruiting/hiring-companies'
+    assert calls[0][1]['companies_limit']==10 and calls[0][1]['postings_per_company']==3
     assert payload['field_notes']['coverage'].startswith('index/query')
 
 
@@ -65,6 +74,38 @@ def test_recruiting_projection_merges_duplicate_funding_evidence():
     assert projected['funding'][0]['id']=='f1'
     assert projected['funding'][0]['source_identity']=='supported_by_company_domain'
     assert 'funding_review' not in projected
+
+
+def test_recruiting_projection_keeps_secondary_trigger_attribution():
+    candidate={
+        'record_id':'primary','signal':'seed','triggers':[
+            {'record_id':'primary','signal':'seed'},
+            {'record_id':'secondary','signal':'series_a','signal_date':'2026-09-01','role':None,
+             'stored_dates':{'announcedDate':'2026-09-01'},
+             'source_evidence':[{'url':'https://news.example/f','title':'A raises'}],
+             'funding':{'round':'series a','amount':12000000,'currency':'USD','investors':[{'name':'VC'}],
+                        'verification_status':'verified','source_identity_status':'supported_by_source_title'}},
+        ],
+    }
+    projected=entry._lean_candidate(candidate)
+    [trigger]=projected['other_triggers']
+    assert trigger['stored_dates']['announcedDate']=='2026-09-01'
+    assert trigger['source_evidence'][0]['title']=='A raises'
+    assert trigger['funding']['amount']==12000000 and trigger['funding']['investors'][0]['name']=='VC'
+
+
+def test_recruiting_projection_preserves_secondary_trigger_attribution():
+    candidate={'record_id':'primary','triggers':[
+        {'record_id':'primary','signal':'seed','signal_date':'2026-09-01'},
+        {'record_id':'second','signal':'series_a','signal_date':'2026-09-02','role':'VP Engineering',
+         'stored_dates':{'occurredAt':'2026-09-02'},
+         'source_evidence':[{'url':'https://source.example','title':'A raises'}],
+         'funding':{'round':'series a','amount':12000000,'currency':'USD','investors':[{'name':'Example VC'}],'verification_status':'verified'}}]}
+    projected=entry._lean_candidate(candidate)
+    [trigger]=projected['other_triggers']
+    assert trigger['funding']['amount']==12000000
+    assert trigger['funding']['investors'][0]['name']=='Example VC'
+    assert trigger['source_evidence'][0]['title']=='A raises'
 
 
 def test_brief_keeps_good_posting_and_isolates_stale_posting():
