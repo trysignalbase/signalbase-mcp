@@ -13,6 +13,11 @@ Classic and `/v2` are unchanged; `/v2/brief`
 keeps its fields and structured-content shape while using compact JSON text and
 correcting duplicate requirement/unknown-cost bookkeeping.
 
+For structured claims such as office presence, founder involvement or a first hire,
+the recruiting profile sends non-filtering evidence terms to select a bounded excerpt
+around the matching phrase. These terms do not narrow the company cohort. Cursor-page
+coverage separates `query_exhausted_after_cursor` from `complete_from_first_page`.
+
 ## Workflow tools
 
 | Tool | Purpose |

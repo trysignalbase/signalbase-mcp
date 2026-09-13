@@ -2144,6 +2144,29 @@ def _wf_requirements(args, supported=()):
     return [{"requirement": key, "status": "unknown", "reason": UNOBSERVED_REQUIREMENTS[key]} for key in requested if key not in supported]
 
 
+def _wf_evidence_terms(args):
+    """Non-filtering excerpt terms for the company-first API."""
+    requested = set(_wf_strings(args.get("required_evidence")))
+    terms = []
+    fixed = {
+        "founder_led_sales": '"founder-led sales" OR "founder is selling" OR "founder does sales"',
+        "founder_right_hand": '"right hand" OR "work directly with founder" OR "report to founder"',
+        "founder_origin": '"Polish founder" OR "founded in Poland"',
+        "first_hire": '"first hire" OR "first employee" OR "founding hire"',
+        "expansion_budget": '"expansion budget" OR "budget for expansion"',
+        "company_scaling": '"scaling the team" OR "growing the team" OR "rapid growth"',
+        "startup_status": '"early-stage startup" OR "venture-backed startup" OR startup',
+        "office_opening": '"opening an office" OR "new office"',
+    }
+    for key, query in fixed.items():
+        if key in requested:
+            terms.append(query)
+    if {"office_presence", "office_opening"}.intersection(requested):
+        for place in _wf_strings(args.get("office_locations")):
+            terms.append(f'"{place} office" OR "office in {place}"')
+    return " OR ".join(dict.fromkeys(terms)) or None
+
+
 def _wf_hiring_params(args, funded=False):
     now = _wf_now(args)
     params = {"filter_version": 2, "include_expired": False, "sort_by": "date_posted", "sort_order": "desc", "workflow_evidence": True}
@@ -2932,6 +2955,9 @@ async def _wf_hiring(args, key, ledger, funded=False):
         minimum = _wf_int(args, "min_distinct_role_titles", 1, 1, 10)
         company_params = {k: v for k, v in params.items() if k not in {"sort_by", "sort_order", "include_total", "workflow_evidence"}}
         company_params.update({"companies_limit": size, "postings_per_company": max(3, minimum)})
+        evidence_terms = _wf_evidence_terms(args)
+        if evidence_terms and "description" not in company_params:
+            company_params["evidence_terms"] = evidence_terms
         if args.get("cursor"):
             company_params["cursor"] = args["cursor"]
         response = await _wf_fetch("/recruiting/hiring-companies", company_params, key, ledger)
@@ -2979,6 +3005,8 @@ async def _wf_hiring(args, key, ledger, funded=False):
         companies.sort(key=lambda company: company["screening"]["status"] == "needs_review")
         pagination = response.get("pagination") or {}
         has_more = bool(pagination.get("hasNextPage"))
+        started_from_cursor = bool(args.get("cursor"))
+        complete_from_first_page = not has_more and not started_from_cursor
         states = {company["match_status"] for company in companies}
         match_status = "no_matches" if not companies else (
             "needs_review" if "needs_review" in states else
@@ -2993,8 +3021,8 @@ async def _wf_hiring(args, key, ledger, funded=False):
             for company in companies
         )) if companies else set()
         return {
-            "status": "partial" if has_more else "complete",
-            "query_status": "partial" if has_more else "complete",
+            "status": "complete" if complete_from_first_page else "partial",
+            "query_status": "complete" if complete_from_first_page else "partial",
             "match_status": match_status,
             "evidence_level": next(iter(evidence_levels)) if len(evidence_levels) == 1 else "mixed" if evidence_levels else "indexed",
             "interpreted_query": company_params,
@@ -3002,7 +3030,7 @@ async def _wf_hiring(args, key, ledger, funded=False):
             "unverified_requirements": _wf_requirements(args, supported_for_all),
             "errors": [],
             "screening_summary": {"companies_needing_review": sum(c["screening"]["status"] == "needs_review" for c in companies), "scope": "Company-first page; each company appears once per cursor page."},
-            "coverage": {"matching_postings": None, "rows_scanned": len(rows), "companies_returned": len(companies), "complete_for_indexed_filters": not has_more, "query_exhausted": not has_more, "next_cursor": pagination.get("nextCursor"), "company_groups_span_pages": False, "company_first": True, "funding_evidence_limit_per_company": 5},
+            "coverage": {"matching_postings": None, "rows_scanned": len(rows), "companies_returned": len(companies), "complete_for_indexed_filters": complete_from_first_page, "complete_from_first_page": complete_from_first_page, "page_has_more": has_more, "query_exhausted_after_cursor": not has_more, "next_cursor": pagination.get("nextCursor"), "company_groups_span_pages": False, "company_first": True, "funding_evidence_limit_per_company": 5},
         }
     page = _wf_int(args, "page", 1, 1, 100000)
     start_page = page
@@ -3930,6 +3958,7 @@ def _lean_funding(card):
             "occurred_at": item.get("occurredAt"),
             "stored_verification": item.get("verificationStatus"),
             "source_identity": review.get("source_identity_status"),
+            "source_identity_reason": review.get("identity_reason"),
             "evidence_status": review.get("evidence_status") or item.get("evidenceStatus"),
             "sources": sources,
         }
@@ -3971,7 +4000,7 @@ def _lean_company_card(card):
 
 
 def _lean_candidate(candidate):
-    result = {k: deepcopy(v) for k, v in candidate.items() if k not in {"triggers", "headcount_evidence", "source_evidence"}}
+    result = {k: deepcopy(v) for k, v in candidate.items() if k not in {"triggers", "headcount_evidence"}}
     triggers = []
     for trigger in candidate.get("triggers", []):
         if trigger.get("record_id") == candidate.get("record_id"):

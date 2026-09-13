@@ -94,6 +94,39 @@ def test_recruiting_projection_keeps_secondary_trigger_attribution():
     assert trigger['funding']['amount']==12000000 and trigger['funding']['investors'][0]['name']=='VC'
 
 
+def test_recruiting_uses_nonfiltering_office_terms_and_recognizes_excerpt(monkeypatch):
+    calls=[]
+    async def api(endpoint,params,key):
+        calls.append((endpoint,params))
+        return {'data':[{'companyId':'a','companyName':'Alpha','companyWebsite':'https://alpha.example',
+                         'postings':[{'id':'j','role':'Engineer','url':'https://example.org/j',
+                                      'evidence_excerpt':'Our office in Poland is hiring now.'}]}],
+                'pagination':{'nextCursor':None,'hasNextPage':False},'meta':{'creditsUsed':1}}
+    monkeypatch.setattr(entry,'_call_api',api)
+    response=asyncio.run(entry._handle_jsonrpc({'id':1,'method':'tools/call','params':{
+        'name':'find_hiring_companies','arguments':{
+            'request':'Companies with offices in Poland hiring now',
+            'required_evidence':['office_presence'],'office_locations':['Poland'],'verify_live':False,
+        }}},'key','hr_recruiting'))
+    payload=json.loads(response['result']['content'][0]['text'])
+    assert '"Poland office"' in calls[0][1]['evidence_terms']
+    assert payload['prospects'][0]['supported_claims'][0]['requirement']=='office_presence'
+
+
+def test_recruiting_terminal_cursor_page_is_not_globally_complete(monkeypatch):
+    async def api(endpoint,params,key):
+        return {'data':[],'pagination':{'nextCursor':None,'hasNextPage':False},'meta':{'creditsUsed':1}}
+    monkeypatch.setattr(entry,'_call_api',api)
+    response=asyncio.run(entry._handle_jsonrpc({'id':1,'method':'tools/call','params':{
+        'name':'find_hiring_companies','arguments':{
+            'request':'Continue companies','cursor':'opaque-next','verify_live':False,
+        }}},'key','hr_recruiting'))
+    payload=json.loads(response['result']['content'][0]['text'])
+    assert payload['query_status']=='partial'
+    assert payload['coverage']['query_exhausted_after_cursor'] is True
+    assert payload['coverage']['complete_from_first_page'] is False
+
+
 def test_recruiting_projection_preserves_secondary_trigger_attribution():
     candidate={'record_id':'primary','triggers':[
         {'record_id':'primary','signal':'seed','signal_date':'2026-09-01'},
