@@ -1591,7 +1591,10 @@ def _trim_response(data, group_by_company: bool = False):
 
 def _json_response(data: dict, status: int = 200) -> Response:
     """Create a JSON Response with CORS headers."""
-    body = JSON.stringify(to_js(data, dict_converter=Object.fromEntries))
+    # Serialize in Python before crossing the JS bridge. Large Python integers
+    # in schemas or funding records can become JS BigInt, which JSON.stringify
+    # cannot serialize even though the values are valid JSON numbers.
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     headers = Headers.new(to_js(
         {**CORS_HEADERS, "Content-Type": "application/json"},
         dict_converter=Object.fromEntries,
@@ -1672,6 +1675,22 @@ async def _call_api(endpoint: str, params: dict, api_key: str) -> dict:
         return {"error": True, "status": resp.status, "body": data}
 
     return data
+
+
+async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_adapter=False):
+    from recruiting_contract import CONTRACT, REQUEST_CONTRACT
+    contract = REQUEST_CONTRACT if request_adapter else CONTRACT
+    base = _api_base_override or API_BASE
+    if not base.endswith("/api/v2"):
+        raise ValueError("API_BASE must end in /api/v2 to resolve recruiting v3")
+    url = base[:-len("/api/v2")] + "/api/v3/recruiting/" + ("request/" if request_adapter else "") + tool.replace("_", "-")
+    response = await fetch(url, to_js({"method": "POST", "headers": {
+        "Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+        "Idempotency-Key": operation_id, "X-Recruiting-Contract": contract.get("contract_hash", "unversioned")}, "body": json.dumps(arguments)}, dict_converter=Object.fromEntries))
+    body = await response.text()
+    if len(body) > 4_000_000:
+        raise ValueError("Recruiting response exceeded the bounded response size")
+    return json.loads(body)
 
 
 class WorkflowError(Exception):
@@ -4076,6 +4095,9 @@ def _lean_response(payload, request, args):
 
 
 def _tools_for_profile(profile):
+    if profile in {"recruiting_v3", "recruiting_v3_request"}:
+        from recruiting_v3 import tools as v3_tools
+        return v3_tools(profile == "recruiting_v3_request")
     if profile == "hr_recruiting":
         return _recruiting_tools()
     if profile == "hr_brief":
@@ -4128,6 +4150,11 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
     else:
         params = raw_params
 
+    if profile in {"recruiting_v3", "recruiting_v3_request"}:
+        from recruiting_v3 import handle as handle_v3
+        request_adapter = profile == "recruiting_v3_request"
+        callback = (lambda tool, args, key, op: _call_recruiting_v3(tool, args, key, op, True)) if request_adapter else _call_recruiting_v3
+        return await handle_v3(request_body, api_key, callback, request_adapter)
     if profile in {"hr_brief", "hr_recruiting"}:
         if method == "initialize":
             recruiting = profile == "hr_recruiting"
@@ -4386,7 +4413,7 @@ async def on_fetch(request, env):
         )
 
     path = urlsplit(str(request.url)).path.rstrip("/")
-    profile = "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
+    profile = "recruiting_v3_request" if path == "/v3/recruiting/request" else "recruiting_v3" if path == "/v3/recruiting" else "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
     response, status = await _handle_body(body, api_key, profile)
     if status != 200:
         return _json_response(response, status)
