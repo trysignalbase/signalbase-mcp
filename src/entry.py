@@ -1591,7 +1591,10 @@ def _trim_response(data, group_by_company: bool = False):
 
 def _json_response(data: dict, status: int = 200) -> Response:
     """Create a JSON Response with CORS headers."""
-    body = JSON.stringify(to_js(data, dict_converter=Object.fromEntries))
+    # Serialize in Python before crossing the JS bridge. Large Python integers
+    # in schemas or funding records can become JS BigInt, which JSON.stringify
+    # cannot serialize even though the values are valid JSON numbers.
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     headers = Headers.new(to_js(
         {**CORS_HEADERS, "Content-Type": "application/json"},
         dict_converter=Object.fromEntries,

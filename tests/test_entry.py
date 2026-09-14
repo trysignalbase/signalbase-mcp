@@ -19,6 +19,15 @@ def _tool(name):
     return next(t for t in entry.TOOLS if t["name"] == name)
 
 
+def test_json_response_serializes_large_numbers_and_null_in_python(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Response body must not pass Python values through JS JSON.stringify")
+    monkeypatch.setattr(entry.JSON, "stringify", forbidden)
+    value = {"id": None, "amount": 2**60, "company": "Société", "valid": True}
+    response = entry._json_response(value)
+    assert json.loads(response[0][0]) == value
+
+
 def _props(name):
     return _tool(name)["inputSchema"]["properties"]
 
