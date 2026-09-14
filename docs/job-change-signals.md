@@ -1,11 +1,13 @@
 # Job Change Signals
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_job_change_signals`
 
 Search for leadership and key-hire job change signals. Returns people who recently changed roles with person name, new role, company, and LinkedIn URLs.
 
 **Endpoint:** `GET /signals/job-changes`
-**Cost:** 1 credit per call
+**Cost:** 1 credit per executed search (even with 0 rows); free with `count=true`
 
 ## Parameters
 
@@ -14,11 +16,25 @@ Search for leadership and key-hire job change signals. Returns people who recent
 | `page` | integer | Page number (default 1) | `1` |
 | `limit` | integer | Results per page, max 50 (default 20) | `20` |
 | `search` | string | Free-text search by company or person keywords | `"engineering leadership"` |
+| `countries` | string | Person country OR company HQ. ISO-2 codes, English names, or regions (`EU`, `EUROPE`, `DACH`, `BENELUX`, `NORDICS`, `CEE`, `WE`, `NORTH_AMERICA`, `LATAM`); with `filter_version=2`: unknown → 400 | `"DACH"` |
+| `exclude_countries` | string | Same values as `countries`, excluded | `"US"` |
+| `city` | string | Free-text city match | `"Berlin"` |
+| `company_name` | string | Company name match | `"Stripe"` |
+| `company_domain` | string | Comma-separated domains, up to 50, strict canonical match | `"stripe.com,vercel.com"` |
+| `company_linkedin_url` | string | Comma-separated LinkedIn company URLs, up to 50 | `"https://www.linkedin.com/company/stripe"` |
+| `companyLinkedinUrl` | string | Deprecated alias of `company_linkedin_url` (single URL) | |
+| `person_linkedin_url` | string | Exact LinkedIn profile URL | `"https://www.linkedin.com/in/example"` |
+| `new_role` | string | Free-text match on the new role title | `"Chief Technology Officer"` |
 | `positions` | string | Comma-separated positions | `"cto,head of engineering"` |
 | `departments` | string | Comma-separated departments | `"engineering,product"` |
-| `seniorities` | string | Comma-separated seniority levels | `"c_level,vp,head"` |
-| `personLinkedinUrl` | string | Exact LinkedIn profile URL | `"https://www.linkedin.com/in/example"` |
-| `companyLinkedinUrl` | string | Exact LinkedIn company page URL | `"https://www.linkedin.com/company/example"` |
+| `seniorities` | string | Comma-separated seniority levels (word-boundary matched) | `"c_level,vp,head"` |
+| `dateFrom` | string | Start date (YYYY-MM-DD) | `"2024-01-01"` |
+| `dateTo` | string | End date (YYYY-MM-DD) | `"2024-12-31"` |
+| `date_preset` | string | Relative date shorthand (overrides dateFrom/dateTo) | `"last_30d"` |
+| `sort_by` | string | `occurred_at`, `discovered_at`, `person_name`, `company_name` | `"occurred_at"` |
+| `sort_order` | string | `asc` or `desc` | `"desc"` |
+| `count` | boolean | Return only the total count (free) | `true` |
+| `verbose` | boolean | Worker-only: return the full untrimmed payload | `true` |
 
 ## Positions Enum
 
@@ -51,6 +67,8 @@ founder, c_level, vp, director, head, lead, manager
     "arguments": {
       "seniorities": "c_level,vp",
       "departments": "engineering",
+      "countries": "EU",
+      "date_preset": "last_30d",
       "limit": 10
     }
   }
@@ -84,7 +102,8 @@ founder, c_level, vp, director, head, lead, manager
   "meta": {
     "endpoint": "signals.job-changes",
     "creditsUsed": 1
-  }
+  },
+  "_meta": {"trimmed": true, "hint": "pass verbose=true for full text"}
 }
 ```
 
@@ -92,7 +111,7 @@ founder, c_level, vp, director, head, lead, manager
 
 ### Track CTO changes
 ```json
-{"positions": "cto", "limit": 20}
+{"positions": "cto", "date_preset": "last_30d", "limit": 20}
 ```
 
 ### Monitor engineering leadership moves
@@ -102,17 +121,18 @@ founder, c_level, vp, director, head, lead, manager
 
 ### Look up a specific person's job changes
 ```json
-{"personLinkedinUrl": "https://www.linkedin.com/in/johndoe"}
+{"person_linkedin_url": "https://www.linkedin.com/in/johndoe"}
 ```
 
-### Find leadership changes at a specific company
+### Leadership changes across a list of companies (one credit)
 ```json
-{"companyLinkedinUrl": "https://www.linkedin.com/company/stripe"}
+{"company_domain": "stripe.com,vercel.com,linear.app", "seniorities": "c_level,vp"}
 ```
 
 ## Important Notes
 
-- The `positions` filter matches specific titles (e.g. "cto"), while `seniorities` matches broader levels (e.g. "c_level" captures CEO, CTO, CFO, etc.)
+- The `positions` filter matches specific titles (e.g. "cto"), while `seniorities` matches broader levels (e.g. "c_level" captures CEO, CTO, CFO, etc.) using word boundaries — a "Director of Sales" is not `c_level`
 - Use `seniorities` for broader coverage, `positions` for specific roles
-- LinkedIn URLs must be exact matches (not partial)
-- No date filtering on this endpoint — results are sorted by recency
+- LinkedIn URLs and domains are strict canonical matches (not partial)
+- Every executed search costs 1 credit, even with 0 rows — size with `count=true` first (free)
+- `personHeadline` is truncated to 300 characters only with `verbose=false`

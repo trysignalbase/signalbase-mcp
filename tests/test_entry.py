@@ -1,0 +1,701 @@
+"""Unit tests for src/entry.py (pure-Python parts; JS runtime is stubbed in conftest)."""
+
+import asyncio
+import json
+
+import pytest
+
+import entry  # loaded by conftest.py from src/entry.py
+
+
+def _rpc(method, params=None, api_key="test-key", req_id=1):
+    body = {"jsonrpc": "2.0", "id": req_id, "method": method}
+    if params is not None:
+        body["params"] = params
+    return asyncio.run(entry._handle_jsonrpc(body, api_key))
+
+
+def _tool(name):
+    return next(t for t in entry.TOOLS if t["name"] == name)
+
+
+def test_json_response_serializes_large_numbers_and_null_in_python(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Response body must not pass Python values through JS JSON.stringify")
+    monkeypatch.setattr(entry.JSON, "stringify", forbidden)
+    value = {"id": None, "amount": 2**60, "company": "Société", "valid": True}
+    response = entry._json_response(value)
+    assert json.loads(response[0][0]) == value
+
+
+def _props(name):
+    return _tool(name)["inputSchema"]["properties"]
+
+
+# ──────────────────────────────────────────────────────────────
+# _build_query_string / _url_encode
+# ──────────────────────────────────────────────────────────────
+
+def test_build_query_string_bools_none_and_lists():
+    qs = entry._build_query_string({
+        "count": True,
+        "include_expired": False,
+        "skip": None,
+        "countries": ["SE", "NO"],
+        "limit": 50,
+    })
+    assert qs == "count=true&include_expired=false&countries=SE%2CNO&limit=50"
+
+
+def test_build_query_string_empty():
+    assert entry._build_query_string({}) == ""
+    assert entry._build_query_string({"a": None}) == ""
+
+
+def test_url_encode():
+    assert entry._url_encode("abc-_.~09") == "abc-_.~09"
+    assert entry._url_encode("a b") == "a%20b"
+    assert entry._url_encode("a&b=c+d|e,f") == "a%26b%3Dc%2Bd%7Ce%2Cf"
+    assert entry._url_encode("é") == "%C3%A9"
+
+
+# ──────────────────────────────────────────────────────────────
+# tools/call pre-processing: verbose stripped, lists joined
+# ──────────────────────────────────────────────────────────────
+
+def test_prepare_tool_args_pops_verbose_and_joins_lists():
+    params, verbose, _opts = entry._prepare_tool_args({
+        "verbose": True,
+        "countries": ["SE", "NO", "DK"],
+        "company_domain": ("a.com", "b.com"),
+        "limit": 10,
+    })
+    assert verbose is True
+    assert "verbose" not in params
+    assert params == {"countries": "SE,NO,DK", "company_domain": "a.com,b.com", "limit": 10}
+
+
+def test_prepare_tool_args_verbose_string_and_default():
+    assert entry._prepare_tool_args({"verbose": "true"})[1] is True
+    assert entry._prepare_tool_args({"verbose": "false"})[1] is False
+    assert entry._prepare_tool_args({})[1] is True
+    assert entry._prepare_tool_args(None)[:2] == ({}, True)
+
+
+def test_tools_call_strips_verbose_before_call_api(monkeypatch):
+    captured = {}
+
+    async def fake_call_api(endpoint, params, api_key):
+        captured.setdefault("endpoint", endpoint)
+        captured.setdefault("params", params)
+        captured.setdefault("api_key", api_key)
+        return {"success": True, "data": [{"companyName": "X", "companyLogo": "http://logo"}]}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+
+    resp = _rpc("tools/call", {
+        "name": "search_hiring_signals",
+        "arguments": {"verbose": True, "countries": ["SE", "NO"], "count": True},
+    })
+
+    assert captured["endpoint"] == "/signals/hiring"
+    assert captured["api_key"] == "test-key"
+    assert "verbose" not in captured["params"]
+    assert captured["params"]["countries"] == "SE,NO"
+    assert captured["params"]["count"] is True
+    # verbose=true → untrimmed, indented payload
+    text = resp["result"]["content"][0]["text"]
+    assert "\n" in text
+    payload = json.loads(text)
+    assert "_meta" not in payload
+    assert payload["data"][0]["companyLogo"] == "http://logo"
+
+
+def test_tools_call_explicit_compact(monkeypatch):
+    async def fake_call_api(endpoint, params, api_key):
+        return {"success": True, "data": [{"companyName": "X", "companyLogo": "http://logo"}]}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    resp = _rpc("tools/call", {"name": "search_funding_signals", "arguments": {"limit": 1, "verbose": False}})
+    text = resp["result"]["content"][0]["text"]
+    assert "\n" not in text
+    payload = json.loads(text)
+    assert payload["_meta"] == {"trimmed": True, "hint": "pass verbose=true for full text"}
+    assert "companyLogo" not in payload["data"][0]
+
+
+def test_tools_call_api_error_is_surfaced(monkeypatch):
+    async def fake_call_api(endpoint, params, api_key):
+        return {"error": True, "status": 400, "body": {"error": "Unknown query parameter: foo"}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    resp = _rpc("tools/call", {"name": "search_companies", "arguments": {"foo": 1}})
+    assert resp["result"]["isError"] is True
+    assert "HTTP 400" in resp["result"]["content"][0]["text"]
+    assert "Unknown query parameter" in resp["result"]["content"][0]["text"]
+
+
+def test_tools_call_without_api_key():
+    resp = _rpc("tools/call", {"name": "search_companies", "arguments": {}}, api_key="")
+    assert resp["result"]["isError"] is True
+    assert "No API key" in resp["result"]["content"][0]["text"]
+
+
+# ──────────────────────────────────────────────────────────────
+# _trim_response
+# ──────────────────────────────────────────────────────────────
+
+def test_trim_response_truncates_drops_and_keeps():
+    long_text = "x" * 500
+    data = {
+        "success": True,
+        "data": [{
+            "descriptionText": long_text,
+            "companyDescription": long_text,
+            "description": long_text,
+            "postContent": long_text,
+            "personHeadline": long_text,
+            "shortDescription": "short",
+            "companyLogo": "http://l1",
+            "companyLogoUrl": "http://l2",
+            "logoUrl": "http://l3",
+            "logo_url": "http://l4",
+            "image": "http://l5",
+            "jobUrl": "https://www.linkedin.com/jobs/view/1",
+            "sources": ["https://a", "https://b"],
+            "companyLinkedin": "https://www.linkedin.com/company/x",
+            "personLinkedinUrl": "https://www.linkedin.com/in/y",
+            "companyWebsite": "https://x.com",
+            "validThrough": "2026-12-31",
+            "nested": {"logoUrl": "http://l6", "description": long_text},
+        }],
+        "pagination": {"totalCount": 1},
+    }
+    out = entry._trim_response(data)
+    row = out["data"][0]
+    for f in ("descriptionText", "companyDescription", "description", "postContent", "personHeadline"):
+        assert len(row[f]) == 301
+        assert row[f].endswith("…")
+        assert row[f][:300] == "x" * 300
+    assert row["shortDescription"] == "short"
+    for f in ("companyLogo", "companyLogoUrl", "logoUrl", "logo_url", "image"):
+        assert f not in row
+    assert row["jobUrl"] == "https://www.linkedin.com/jobs/view/1"
+    assert row["sources"] == ["https://a", "https://b"]
+    assert row["companyLinkedin"] == "https://www.linkedin.com/company/x"
+    assert row["personLinkedinUrl"] == "https://www.linkedin.com/in/y"
+    assert row["companyWebsite"] == "https://x.com"
+    assert row["validThrough"] == "2026-12-31"
+    assert "logoUrl" not in row["nested"]
+    assert row["nested"]["description"].endswith("…")
+    assert out["pagination"] == {"totalCount": 1}
+    assert out["_meta"] == {"trimmed": True, "hint": "pass verbose=true for full text"}
+    # original untouched
+    assert data["data"][0]["companyLogo"] == "http://l1"
+
+
+def test_trim_response_short_text_untouched():
+    out = entry._trim_response({"data": [{"description": "x" * 300}]})
+    assert out["data"][0]["description"] == "x" * 300
+
+
+def test_success_result_modes():
+    data = {"data": [{"description": "y" * 400, "logoUrl": "z"}]}
+    compact = entry._success_result(data, verbose=False)["content"][0]["text"]
+    verbose = entry._success_result(data, verbose=True)["content"][0]["text"]
+    assert "\n" not in compact and "_meta" in compact and "logoUrl" not in compact
+    assert "\n" in verbose and "_meta" not in verbose and "logoUrl" in verbose
+    assert len(compact) < len(verbose)
+
+
+# ──────────────────────────────────────────────────────────────
+# tools/list schema
+# ──────────────────────────────────────────────────────────────
+
+def test_tools_list_returns_six_tools():
+    resp = _rpc("tools/list")
+    names = [t["name"] for t in resp["result"]["tools"]]
+    assert names == [
+        "search_funding_signals", "search_acquisition_signals",
+        "search_job_change_signals", "search_hiring_signals",
+        "search_investors", "search_companies",
+    ]
+
+
+def test_tools_list_is_json_serialisable():
+    json.dumps({"tools": entry.TOOLS})
+
+
+def test_subcategories_has_no_enum_and_lists_values():
+    for tool in ("search_funding_signals", "search_acquisition_signals",
+                 "search_hiring_signals", "search_companies"):
+        prop = _props(tool)["subcategories"]
+        assert "enum" not in prop, tool
+        assert prop["type"] == "string"
+        assert "ai" in prop["description"] and "fintech" in prop["description"]
+
+
+def test_every_tool_has_count_and_verbose():
+    for t in entry.TOOLS:
+        props = t["inputSchema"]["properties"]
+        assert props["count"]["type"] == "boolean", t["name"]
+        assert props["verbose"]["type"] == "boolean", t["name"]
+        assert "free" in props["count"]["description"].lower()
+
+
+def test_funding_schema_new_keys():
+    p = _props("search_funding_signals")
+    for k in ("employee_count_min", "employee_count_max", "founded_year_min", "founded_year_max",
+              "company_domain", "company_linkedin_url", "exclude_countries", "amount_min",
+              "amount_max", "round", "count", "verbose"):
+        assert k in p, k
+    assert p["employee_count_max"]["type"] == "integer"
+    assert "50" in p["company_domain"]["description"]
+    assert "NORDICS" in p["countries"]["description"] and "DACH" in p["countries"]["description"]
+
+
+def test_acquisitions_schema_new_keys():
+    p = _props("search_acquisition_signals")
+    for k in ("employee_count_min", "employee_count_max", "company_domain",
+              "company_linkedin_url", "exclude_countries", "count", "verbose"):
+        assert k in p, k
+    assert "round" not in p
+
+
+def test_job_changes_schema_new_keys():
+    p = _props("search_job_change_signals")
+    for k in ("countries", "exclude_countries", "company_domain", "company_linkedin_url",
+              "person_linkedin_url", "new_role", "dateFrom", "dateTo", "date_preset",
+              "sort_by", "sort_order", "count", "verbose"):
+        assert k in p, k
+    assert "personLinkedinUrl" in p
+
+
+def test_hiring_schema_new_keys():
+    p = _props("search_hiring_signals")
+    for k in ("job_countries", "company_countries", "exclude_countries", "company_domain",
+              "company_linkedin_url", "company_name", "include_expired", "team_size",
+              "count", "verbose"):
+        assert k in p, k
+    assert p["include_expired"]["type"] == "boolean"
+    assert "default" not in p["include_expired"]
+    assert "HQ" in p["countries"]["description"]
+    assert "1-10" in p["team_size"]["description"]
+    assert p["limit"]["maximum"] == 100
+
+
+def test_investors_and_companies_schema_new_keys():
+    inv = _props("search_investors")
+    for k in ("exclude_countries", "type", "headquarters", "ticket_size_min",
+              "ticket_size_max", "count", "verbose"):
+        assert k in inv, k
+    comp = _props("search_companies")
+    for k in ("exclude_countries", "categories", "subcategories", "domain", "linkedin_url",
+              "employee_count_min", "employee_count_max", "count", "verbose"):
+        assert k in comp, k
+
+
+# ──────────────────────────────────────────────────────────────
+# initialize / ping / errors / prompts
+# ──────────────────────────────────────────────────────────────
+
+def test_initialize():
+    resp = _rpc("initialize", {"protocolVersion": "2025-03-26"})
+    result = resp["result"]
+    assert result["protocolVersion"] == entry.PROTOCOL_VERSION
+    assert result["serverInfo"] == {"name": "signalbase-mcp", "version": "1.1.0"}
+    assert "count=true` is free" in result["instructions"] or "count=true is free" in result["instructions"].replace("`", "")
+    assert "boolean as string" not in result["instructions"].lower()
+    assert "84%" in result["instructions"]
+    assert "include_expired" in result["instructions"]
+
+
+def test_ping():
+    resp = _rpc("ping")
+    assert resp == {"jsonrpc": "2.0", "id": 1, "result": {}}
+
+
+def test_notifications_initialized_returns_none():
+    assert _rpc("notifications/initialized") is None
+
+
+def test_unknown_method():
+    resp = _rpc("no/such")
+    assert resp["error"]["code"] == -32601
+
+
+def test_unknown_tool():
+    resp = _rpc("tools/call", {"name": "nope", "arguments": {}})
+    assert resp["error"]["code"] == -32602
+
+
+def test_unknown_prompt():
+    resp = _rpc("prompts/get", {"name": "nope"})
+    assert resp["error"]["code"] == -32602
+
+
+def test_prompts_list_has_funded_and_hiring():
+    resp = _rpc("prompts/list")
+    names = [p["name"] for p in resp["result"]["prompts"]]
+    assert "funded-and-hiring" in names
+    prompt = next(p for p in resp["result"]["prompts"] if p["name"] == "funded-and-hiring")
+    arg_names = [a["name"] for a in prompt["arguments"]]
+    assert arg_names == ["geography", "max_employees", "department", "window"]
+    assert all(a["required"] is False for a in prompt["arguments"])
+
+
+def test_prompts_get_funded_and_hiring_defaults():
+    resp = _rpc("prompts/get", {"name": "funded-and-hiring", "arguments": {}})
+    text = resp["result"]["messages"][0]["content"]["text"]
+    assert resp["result"]["messages"][0]["role"] == "user"
+    assert "countries=EU" in text
+    assert "employee_count_max=10" in text
+    assert "date_preset=last_90d" in text
+    assert "departments=sales" in text
+    assert "count=true" in text
+    assert "company_domain=<up to 50" in text
+    assert "limit=100" in text and "sort_by=date_posted" in text
+    assert "company_countries=EU" in text
+    assert "team_size=1-10" in text
+    assert "jobUrl" in text and "validThrough" in text
+
+
+def test_prompts_get_funded_and_hiring_custom_args():
+    resp = _rpc("prompts/get", {"name": "funded-and-hiring", "arguments": {
+        "geography": "NORDICS", "max_employees": "50", "department": "engineering", "window": "last_30d",
+    }})
+    text = resp["result"]["messages"][0]["content"]["text"]
+    assert "countries=NORDICS" in text
+    assert "employee_count_max=50" in text
+    assert "date_preset=last_30d" in text
+    assert "departments=engineering" in text
+    assert "team_size=1-10,11-50" in text
+
+
+def test_team_size_for_max():
+    assert entry._team_size_for_max(10) == "1-10"
+    assert entry._team_size_for_max("50") == "1-10,11-50"
+    assert entry._team_size_for_max(200) == "1-10,11-50,51-200"
+    assert entry._team_size_for_max(5000) == "1-10,11-50,51-200,201-1000,1000-plus"
+    assert entry._team_size_for_max("abc") == "1-10"
+
+
+class _Env:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def test_api_base_override_from_env():
+    assert entry._resolve_api_base(None) == entry.API_BASE
+    assert entry._resolve_api_base(_Env()) == entry.API_BASE
+    assert (
+        entry._resolve_api_base(_Env(API_BASE="http://localhost:3000/api/v2/"))
+        == "http://localhost:3000/api/v2"
+    )
+
+
+def test_trim_response_no_meta_when_nothing_trimmed():
+    # count=true / empty results carry no long text or logos → no _meta noise
+    out = entry._trim_response({"success": True, "data": [], "pagination": {"totalCount": 2}})
+    assert "_meta" not in out
+    out = entry._trim_response({"data": [{"companyName": "X", "description": "short"}]})
+    assert "_meta" not in out
+
+
+def test_trim_caps_sources_and_decodes_json_lists():
+    row = {
+        "companyName": "FOMO",
+        "sources": [{"title": f"s{i}", "url": f"https://x/{i}"} for i in range(18)],
+        "companyCategories": '["Manufacturing","Manufacturing","Software"]',
+        "investors": [{"name": "A"}],
+    }
+    out = entry._trim_response({"data": [row]})
+    r = out["data"][0]
+    assert len(r["sources"]) == 3 and r["sourcesTotal"] == 18
+    assert r["sources"][0]["url"] == "https://x/0"
+    assert r["companyCategories"] == '["Manufacturing","Software"]'  # still a JSON string, de-duplicated
+    assert r["investors"] == [{"name": "A"}]
+    assert out["_meta"]["trimmed"] is True
+    # short lists and non-JSON strings are untouched
+    out2 = entry._trim_response({"data": [{"sources": [1, 2], "companyCategories": "Software"}]})
+    assert out2["data"][0] == {"sources": [1, 2], "companyCategories": "Software"}
+    assert "_meta" not in out2
+    # verbose keeps the raw API shape
+    verbose = json.loads(entry._success_result({"data": [row]}, verbose=True)["content"][0]["text"])
+    assert len(verbose["data"][0]["sources"]) == 18
+    assert isinstance(verbose["data"][0]["companyCategories"], str)
+
+
+def test_trim_drops_internal_ids_in_nested_lists():
+    row = {"investors": [{"id": "uuid", "name": "Hi Inov", "type": "VC"}],
+           "sources": [{"url": "https://x", "isPrimary": True, "title": None}]}
+    out = entry._trim_response({"data": [row]})
+    assert out["data"][0]["investors"] == [{"name": "Hi Inov", "type": "VC"}]
+    assert out["data"][0]["sources"] == [{"url": "https://x", "title": None}]
+    assert out["_meta"]["trimmed"] is True
+
+
+def test_resolve_role_families_and_titles():
+    assert entry._resolve_role("bdr") == {"positions": "bdr"}
+    assert entry._resolve_role("SDR") == {"positions": "bdr"}
+    assert entry._resolve_role("account executive") == {"positions": "account executive"}
+    assert entry._resolve_role("ae") == {"positions": "account executive"}
+    assert entry._resolve_role("Sales or business development") == {"departments": "sales"}
+    assert entry._resolve_role("engineers") == {"departments": "engineering"}
+    assert entry._resolve_role("head of sales") == {"positions": "head of sales"}
+    assert entry._resolve_role("cto") == {"positions": "cto"}
+    assert entry._resolve_role("underwater basket weaver") == {"positions": "underwater basket weaver"}
+    assert entry._resolve_role("director of sales") == {"positions": "director of sales"}
+    assert entry._resolve_role("senior software engineer") == {"positions": "senior software engineer"}
+    assert entry._resolve_role("data engineer") == {"positions": "data engineer"}
+    assert entry._resolve_role("bdr, cto") == {"positions": "bdr,cto"}
+    assert entry._resolve_role("") == {}
+
+
+def test_resolve_intent_args_hiring():
+    out = entry._resolve_intent_args("search_hiring_signals", {
+        "role": "bdr", "headcount_max": 9, "countries": "BE,NL", "country_scope": "hq", "count": True,
+    })
+    assert out == {"positions": "bdr", "team_size": "1-9", "company_countries": "BE,NL", "count": True}
+    out = entry._resolve_intent_args("search_hiring_signals", {"headcount_min": 50, "countries": "US", "country_scope": "job"})
+    assert out["team_size"].startswith("50-") and out["job_countries"] == "US" and "countries" not in out
+    # explicit API params win over intent args
+    out = entry._resolve_intent_args("search_hiring_signals", {"role": "bdr", "departments": "marketing"})
+    assert out["departments"] == "marketing" and out["positions"] == "bdr"
+    out = entry._resolve_intent_args("search_hiring_signals", {"role": "sales", "departments": "marketing"})
+    assert out["departments"] == "marketing,sales"
+    out = entry._resolve_intent_args("search_hiring_signals", {
+        "role": "bdr or engineers", "role_logic": "or", "departments": "marketing",
+    })
+    assert out["role_logic"] == "or"
+    assert out["positions"] == "bdr"
+    assert out["departments"] == "marketing,engineering"
+
+
+def test_resolve_intent_args_funding_and_passthrough():
+    out = entry._resolve_intent_args("search_funding_signals", {"headcount_max": 10, "countries": "EU"})
+    assert out == {"employee_count_max": 10, "countries": "EU"}
+    out = entry._resolve_intent_args("search_investors", {"countries": "GB"})
+    assert out == {"countries": "GB"}
+
+
+def test_country_breakdown_on_multi_country_count(monkeypatch):
+    calls = []
+
+    async def fake_call_api(endpoint, params, api_key):
+        calls.append(dict(params))
+        n = {"BE": 0, "US": 31, "AE": 1, "BE,US,AE": 32}.get(params.get("company_countries", ""), 5)
+        return {"success": True, "data": [], "pagination": {"totalCount": n}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {
+        "role": "bdr", "headcount_max": 9, "countries": ["BE", "US", "AE"], "country_scope": "hq", "count": True, "by_country": True}})
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["pagination"]["totalCount"] == 32
+    assert payload["byCountry"] == {"BE": 0, "US": 31, "AE": 1}
+    assert "BE" in payload["hint"]
+    assert calls[0]["company_countries"] == "BE,US,AE" and calls[0]["positions"] == "bdr"
+    assert len(calls) == 4  # one combined + three per-country, all free
+
+
+def test_no_breakdown_for_paid_or_single_country(monkeypatch):
+    calls = []
+
+    async def fake_call_api(endpoint, params, api_key):
+        calls.append(dict(params))
+        return {"success": True, "data": [], "pagination": {"totalCount": 1}, "meta": {"creditsUsed": 1}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "BE,US", "limit": 5}})
+    _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "BE", "count": True}})
+    assert len(calls) == 2
+
+
+def test_trim_unescapes_html_entities():
+    out = entry._trim_response({"data": [{"title": "Sales &amp; Marketing Lead", "companyName": "R&amp;D Co"}]})
+    assert out["data"][0]["title"] == "Sales & Marketing Lead"
+    assert out["data"][0]["companyName"] == "R&D Co"
+    assert out["_meta"]["trimmed"] is True
+
+
+def test_hiring_schema_leads_with_intent_args():
+    props = list(next(t for t in entry.TOOLS if t["name"] == "search_hiring_signals")["inputSchema"]["properties"])
+    assert props[:5] == ["role", "headcount_max", "headcount_min", "countries", "country_scope"]
+
+
+def test_hiring_rows_grouped_by_company():
+    rows = [
+        {"companyName": "Trove", "companyCountry": "US", "companyEmployeeCount": 7, "companyWebsite": "trove.com",
+         "title": "Sales Development Representative", "location": "Encinitas, CA", "datePosted": "2026-06-03T00:00:00Z", "jobUrl": "https://l/1"},
+        {"companyName": "Trove", "companyCountry": "US", "companyEmployeeCount": 7, "companyWebsite": "trove.com",
+         "title": "Sales Development Representative", "location": "Sausalito, CA", "datePosted": "2026-06-01T00:00:00Z", "jobUrl": "https://l/2"},
+        {"companyName": "Ploy", "companyCountry": "US", "companyEmployeeCount": 6, "companyWebsite": "ploy.io",
+         "title": "BDR", "location": "NYC", "datePosted": "2026-06-17T00:00:00Z", "jobUrl": "https://l/3"},
+        {"companyName": "Ploy", "companyCountry": "US", "companyEmployeeCount": 6, "companyWebsite": "ploy.io",
+         "title": "SDR", "location": "NYC", "datePosted": "2026-06-17T00:00:00Z", "jobUrl": "https://l/4"},
+    ]
+    default = entry._trim_response({"success": True, "data": rows, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}})
+    assert "companies" not in default and len(default["data"]) == 4  # opt-in only
+    out = entry._trim_response({"success": True, "data": rows, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}}, group_by_company=True)
+    assert out["companiesTotal"] == 2
+    assert len(out["data"]) == 4  # rows are kept next to the grouped view
+    trove = next(c for c in out["companies"] if c["company"] == "Trove")
+    assert trove["openRoles"] == 1 and trove["postings"][0]["locations"] == ["Encinitas, CA", "Sausalito, CA"]
+    assert len(trove["postings"][0]["links"]) == 2
+    ploy = next(c for c in out["companies"] if c["company"] == "Ploy")
+    assert ploy["openRoles"] == 2
+    # count-only and non-hiring responses are untouched
+    assert "companies" not in entry._trim_response({"data": [], "meta": {"endpoint": "signals.hiring"}}, group_by_company=True)
+    assert "companies" not in entry._trim_response({"data": rows, "meta": {"endpoint": "signals.funding"}}, group_by_company=True)
+
+
+def test_mixed_role_alternatives_stay_or():
+    out = entry._resolve_role("bdr or engineers")
+    assert out == {"departments": "engineering", "positions": "bdr", "role_logic": "or"}
+    assert "role_logic" not in entry._resolve_role("bdr")
+    assert "role_logic" not in entry._resolve_role("engineers")
+
+
+def test_full_hr_argument_path_preserves_explicit_or_with_inferred_filters(monkeypatch):
+    calls = []
+
+    async def api(endpoint, params, key):
+        calls.append((endpoint, params))
+        return {"success": True, "data": [], "pagination": {"totalCount": 7}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {
+        "name": "search_hiring_signals", "arguments": {
+            "role": "bdr or engineers", "role_logic": "or", "departments": "marketing",
+            "headcount_max": 9, "count": True, "by_country": False,
+        },
+    }}, "key", "hr"))
+    assert not response["result"].get("isError")
+    [(_, params)] = calls
+    assert params["role_logic"] == "or"
+    assert params["positions"] == "bdr"
+    assert params["departments"] == "marketing,engineering"
+    assert params["team_size"] == "1-9"
+
+
+def test_no_region_named_na_is_advertised():
+    blob = json.dumps(entry.TOOLS) + entry.INSTRUCTIONS
+    assert "NORTH_AMERICA" in blob
+    import re as _re
+    assert not _re.search(r"[^A-Z_]NA[^A-Z_]", blob.replace("NAMIBIA", "").replace("Namibia", "")) or "(`NA` is Namibia)" in blob
+
+
+def test_breakdown_tolerates_probe_failures(monkeypatch):
+    calls = []
+
+    async def fake_call_api(endpoint, params, api_key):
+        calls.append(dict(params))
+        c = params.get("company_countries", "")
+        if c == "AE":
+            raise RuntimeError("upstream fetch failed")
+        n = {"BE": 0, "US": 31, "BE,US,AE": 31}.get(c, 0)
+        return {"success": True, "data": [], "pagination": {"totalCount": n}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {
+        "countries": "BE,US,AE", "country_scope": "hq", "count": True, "by_country": True}})
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["pagination"]["totalCount"] == 31
+    assert payload["byCountry"] == {"BE": 0, "US": 31, "AE": None}
+    assert "AE" in payload["byCountryNote"]
+
+
+def test_breakdown_can_be_switched_off(monkeypatch):
+    calls = []
+
+    async def fake_call_api(endpoint, params, api_key):
+        calls.append(dict(params))
+        return {"success": True, "data": [], "pagination": {"totalCount": 3}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "BE,US,AE", "count": True, "by_country": False}})
+    assert len(calls) == 1 and "by_country" not in calls[0]
+
+
+def test_group_by_company_via_tool_call(monkeypatch):
+    async def fake_call_api(endpoint, params, api_key):
+        assert "group_by_company" not in params
+        return {"success": True, "data": [{"companyName": "Ploy", "title": "BDR", "jobUrl": "https://l"}],
+                "pagination": {"totalCount": 1}, "meta": {"endpoint": "signals.hiring", "creditsUsed": 1}}
+
+    monkeypatch.setattr(entry, "_call_api", fake_call_api)
+    resp = _rpc("tools/call", {"name": "search_hiring_signals", "arguments": {"countries": "US", "group_by_company": True}})
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["companiesTotal"] == 1 and len(payload["data"]) == 1
+
+
+def test_batch_requests_get_one_response_per_request_and_notifications_none():
+    body = [
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        "not an object",
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    ]
+    responses, status = asyncio.run(entry._handle_body(body, "key", "hr"))
+    assert status == 200
+    assert [r.get("id") for r in responses] == [1, None, 2]
+    assert responses[1]["error"]["code"] == -32600
+    assert any(t["name"] == "find_hiring_companies" for t in responses[2]["result"]["tools"])
+
+
+def test_malformed_params_and_arguments_are_structured_errors_without_api_calls(monkeypatch):
+    calls = []
+
+    async def api(*args):
+        calls.append(args)
+        return {"success": True, "data": []}
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    malformed_params, status = asyncio.run(entry._handle_body(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["bad"]}, "key", "hr",
+    ))
+    malformed_args, _ = asyncio.run(entry._handle_body(
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": ["bad"]}}, "key", "hr",
+    ))
+    invalid_number, _ = asyncio.run(entry._handle_body(
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": {"headcount_max": "small"}}}, "key", "hr",
+    ))
+    assert status == 200
+    assert malformed_params["error"]["code"] == -32602
+    assert malformed_args["error"]["code"] == -32602
+    assert invalid_number["result"]["isError"]
+    assert invalid_number["result"]["_meta"]["usage"] == {"api_calls": 0, "credits_used": 0}
+    assert calls == []
+
+
+def test_mixed_success_batch_keeps_successful_items_when_an_item_fails(monkeypatch):
+    async def api(*_args):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    body = [
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search_hiring_signals", "arguments": {"limit": 1}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+    ]
+    responses, status = asyncio.run(entry._handle_body(body, "key", "hr"))
+    assert status == 200 and [response["id"] for response in responses] == [1, 2, 3]
+    assert responses[0]["result"] == {}
+    assert responses[1]["result"]["isError"]
+    assert responses[1]["result"]["_meta"]["usage"] == {
+        "api_calls": 1, "credits_used": 0, "credits_known": False,
+    }
+    assert "tools" in responses[2]["result"]
+
+
+def test_empty_batch_and_non_object_body_are_invalid_requests():
+    for body in ([], "text", 3):
+        response, status = asyncio.run(entry._handle_body(body, "key"))
+        assert status == 400 and response["error"]["code"] == -32600
+    only_notifications, status = asyncio.run(entry._handle_body([{"jsonrpc": "2.0", "method": "notifications/initialized"}], "key"))
+    assert only_notifications is None and status == 200
+
+
+def test_cors_allows_mcp_protocol_headers():
+    allowed = {h.strip().lower() for h in entry.CORS_HEADERS["Access-Control-Allow-Headers"].split(",")}
+    assert {"mcp-protocol-version", "mcp-session-id", "authorization", "content-type"} <= allowed

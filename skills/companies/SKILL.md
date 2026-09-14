@@ -6,8 +6,10 @@ argument-hint: "[company name, industry, geography, or size range]"
 
 # Companies Skill
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_companies`
-**Endpoint:** `GET /companies` | **Cost:** 1 credit (free with count=true)
+**Endpoint:** `GET /companies` | **Cost:** 1 credit per executed search (0 rows still cost); `count=true` free
 
 ## Parameters
 
@@ -16,31 +18,35 @@ argument-hint: "[company name, industry, geography, or size range]"
 | `page` | integer | Page number (default 1) |
 | `limit` | integer | Results per page, max 100 |
 | `search` | string | Name, industry, description, keywords |
-| `countries` | string | Comma-separated country codes |
+| `countries` | string | ISO codes, names, or regions: `US,GB`, `EU`, `DACH` (with `filter_version=2`: unknown → 400) |
+| `exclude_countries` | string | Same values, excluded |
+| `categories` | string | Pipe-separated LinkedIn industry labels |
+| `subcategories` | string | Comma-separated Signalbase categories (multi-select) |
 | `industry` | string | Comma-separated industry names (exact) |
-| `employee_count_min` | integer | Minimum employees |
-| `employee_count_max` | integer | Maximum employees |
-| `founded_year_min` | integer | Min founded year |
-| `founded_year_max` | integer | Max founded year |
+| `domain` | string | Website domain, strict canonical match |
+| `linkedin_url` | string | LinkedIn company URL, strict canonical match |
+| `employee_count_min` / `employee_count_max` | integer | Headcount bounds |
+| `founded_year_min` / `founded_year_max` | integer | Founded year bounds |
 | `sort_by` | string | `name`, `employee_count`, `founded_year`, `created_at` |
 | `sort_order` | string | `asc` or `desc` |
-| `count` | boolean | If true, returns only count (free) |
+| `count` | boolean | Only the total count (free) |
+| `verbose` | boolean | Full untrimmed payload (Worker-only) |
 
 ## Example Workflows
 
 ### Count companies in a segment (free)
 ```json
-{"search": "AI", "countries": "US", "count": true}
+{"search": "AI", "countries": "EU", "count": true}
+```
+
+### Look up a specific company by domain
+```json
+{"domain": "stripe.com"}
 ```
 
 ### Find fast-growing startups (50-200 employees, founded 2021+)
 ```json
 {"founded_year_min": 2021, "employee_count_min": 50, "employee_count_max": 200, "sort_by": "employee_count", "sort_order": "desc"}
-```
-
-### Look up a specific company
-```json
-{"search": "Stripe"}
 ```
 
 ### Browse by industry
@@ -50,8 +56,9 @@ argument-hint: "[company name, industry, geography, or size range]"
 
 ## Gotchas
 
-- Use `count=true` first to preview result size for free
+- Every executed search costs 1 credit even with 0 rows — always `count=true` first
 - `industry` param is **exact match** on LinkedIn industry label
 - `growthInfo` in response can be `null` — not all companies have growth data
 - Growth percentages: `growth_1m`, `growth_3m`, `growth_6m`, `growth_9m`, `growth_12m`
 - `categories`, `keywords`, `specialties` in the response are arrays — these are response fields, not filter params
+- `description` is truncated to 300 chars and `logoUrl` dropped only with `verbose=false`

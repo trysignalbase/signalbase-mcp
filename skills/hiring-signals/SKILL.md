@@ -6,8 +6,12 @@ argument-hint: "[role, department, location, sector, or company]"
 
 # Hiring Signals Skill
 
+> Compatibility: the existing endpoint preserves full payloads, historical defaults and accepted inputs while improving matching automatically. HR MCP `/v2` enables compact responses, open hiring searches, grouped companies and country breakdowns by default. Both keep `data` rows.
+
 ## Tool: `search_hiring_signals`
-**Endpoint:** `GET /signals/hiring` | **Cost:** 1 credit (free with count=true)
+**Endpoint:** `GET /signals/hiring` | **Cost:** 1 credit per executed search (0 rows still cost); `count=true` free
+
+**Coverage:** ~84% of job locations are US. For European targets filter by company HQ (`company_countries`) or by a `company_domain` list — never by job location alone. Historical postings are included by default; use `include_expired=false` for open roles.
 
 ## Parameters
 
@@ -16,28 +20,45 @@ argument-hint: "[role, department, location, sector, or company]"
 | `page` | integer | Page number (default 1) |
 | `limit` | integer | Results per page, max 100 |
 | `search` | string | Free-text search |
-| `countries` | string | Comma-separated country codes |
+| `countries` | string | Job location **or** company HQ. ISO codes, names, or regions `EU`, `NORDICS`, `DACH`, … (with `filter_version=2`: unknown → 400) |
+| `job_countries` | string | Job location only |
+| `company_countries` | string | Company HQ only — use for European targets |
+| `exclude_countries` | string | Same values, excluded |
 | `states` | string | Comma-separated US state codes |
 | `city` | string | City/location search |
+| `company_name` | string | Company name match |
+| `company_domain` | string | Comma-separated domains, up to 50, strict match — one credit for the list |
+| `company_linkedin_url` | string | Comma-separated LinkedIn company URLs, up to 50 |
 | `categories` | string | Pipe-separated industry categories |
-| `subcategories` | string | Comma-separated Signalbase categories |
+| `subcategories` | string | Comma-separated Signalbase categories (multi-select) |
 | `positions` | string | Comma-separated positions |
-| `departments` | string | Comma-separated departments |
+| `departments` | string | Comma-separated departments (`sales`, `engineering`, …) |
 | `seniorities` | string | Comma-separated seniority levels |
-| `team_size` | string | Ranges: `1-10,11-50,51-200,201-1000,1000-plus` |
+| `team_size` | string | Company size ranges: `1-10`, `11-50`, `51-200`, `201-1000`, `1000-plus` |
 | `applicants` | string | Ranges: `0-25,26-50,51-100,101-200,201-plus` |
-| `dateFrom` | string | YYYY-MM-DD |
-| `dateTo` | string | YYYY-MM-DD |
+| `include_expired` | boolean | Omitted/true: include history; false: open roles only |
+| `dateFrom` / `dateTo` | string | YYYY-MM-DD |
 | `date_preset` | string | Relative date shorthand |
 | `sort_by` | string | `date_posted`, `created_at`, `title`, `company_name`, `location` |
 | `sort_order` | string | `asc` or `desc` |
-| `count` | boolean | If true, returns only count (free) |
+| `count` | boolean | Only the total count (free) |
+| `verbose` | boolean | Full untrimmed payload (Worker-only) |
 
 ## Example Workflows
 
 ### Preview count first (free)
 ```json
-{"subcategories": "ai", "countries": "US", "count": true}
+{"company_countries": "NORDICS", "departments": "sales", "count": true}
+```
+
+### Funded pool → open sales roles (one credit per 50 domains)
+```json
+{"company_domain": "a.com,b.com,c.com", "departments": "sales", "limit": 100, "sort_by": "date_posted"}
+```
+
+### Early-stage European companies hiring sales
+```json
+{"company_countries": "EU", "team_size": "1-10", "departments": "sales", "limit": 100, "sort_by": "date_posted"}
 ```
 
 ### AI companies hiring engineers in SF
@@ -45,20 +66,17 @@ argument-hint: "[role, department, location, sector, or company]"
 {"subcategories": "ai", "departments": "engineering", "city": "San Francisco"}
 ```
 
-### Early-stage startups hiring VPs
-```json
-{"team_size": "1-10,11-50", "seniorities": "vp", "date_preset": "last_14d"}
-```
-
 ### Low-competition roles
 ```json
-{"applicants": "0-25", "departments": "engineering", "countries": "US"}
+{"applicants": "0-25", "departments": "engineering", "job_countries": "US"}
 ```
 
 ## Gotchas
 
-- Always use `count=true` first to check result size — it's free
+- Every executed search costs 1 credit even with 0 rows — always `count=true` first
+- Each row carries `jobUrl` and `validThrough`; expired postings are hidden only with `include_expired=false`
 - `categories` uses **pipe** `|` separator, not comma
 - `numApplicants` in response is a string, not integer
-- Team size = company size, not the specific team
+- `team_size` = company size, not the specific team
 - US states use 2-letter codes: CA, NY, TX
+- `descriptionText` is truncated to 300 chars and logos dropped only with `verbose=false`
