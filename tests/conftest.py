@@ -59,6 +59,7 @@ def _install_stubs() -> None:
 _install_stubs()
 
 _ENTRY_PATH = Path(__file__).resolve().parent.parent / "src" / "entry.py"
+sys.path.insert(0, str(_ENTRY_PATH.parent))
 _spec = importlib.util.spec_from_file_location("entry", _ENTRY_PATH)
 entry = importlib.util.module_from_spec(_spec)
 sys.modules["entry"] = entry

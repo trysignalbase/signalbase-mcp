@@ -208,3 +208,6 @@ Configure in the Cloudflare dashboard under Workers → your worker → Settings
 - [Get API Key](https://www.trysignalbase.com/workspace/api)
 - [Signalbase Dashboard](https://www.trysignalbase.com/personal/account)
 - [Cloudflare Workers Python Docs](https://developers.cloudflare.com/workers/languages/python/)
+# Recruiting v3
+
+The opt-in `/v3/recruiting` profile exposes `search_companies`, `search_appointments`, `search_investor_activity`, and `get_evidence`. Its business schema is generated from the app's recruiting service; the Worker no longer owns a separate set of search semantics for this profile. See [the v3 guide](docs/recruiting-v3.md). Existing profiles retain their contracts.
