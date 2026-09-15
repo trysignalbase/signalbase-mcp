@@ -18,8 +18,8 @@ def rpc(method, params=None):
     return asyncio.run(entry._handle_jsonrpc({"id": 1, "method": method, "params": params or {}}, "stub-key", "recruiting_v3"))
 
 
-def test_generated_discovery_has_four_entity_tools_and_documentation():
-    assert {t["name"] for t in rpc("tools/list")["result"]["tools"]} == {"search_companies", "search_appointments", "search_investor_activity", "get_evidence"}
+def test_generated_discovery_has_entity_tools_and_scoped_title_lookup():
+    assert {t["name"] for t in rpc("tools/list")["result"]["tools"]} == {"search_companies", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options"}
     assert rpc("initialize")["result"]["serverInfo"]["name"] == "signalbase-recruiting-v3"
     resource = rpc("resources/read", {"uri": "signalbase://recruiting/v3/guide"})
     assert "examples" in resource["result"]["contents"][0]["text"]
