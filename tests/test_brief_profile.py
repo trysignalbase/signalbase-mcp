@@ -8,11 +8,12 @@ import entry
 
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
-    ('classic','6259c219fab3766b4cac726b5d4148655b3b4d84d7d6cb61c748465957e97664','a51087686735c46835f111fc82bf14ed1fdcd410fae7137caf43fe02dffbcb18'),
-    ('hr','5629331aa618b5709f50d674256cda105539cf9a666781b249861704ef46c125','f67085e03183d79e8c932b59c92e5de213f01aab8342d471f3630c52e52c04fe'),
+    ('classic','9f52cafbb4e6dd7dcbdba1afbbca34ab1c996eb77290a931ccf14af0031c41fe','07aec7e538e8495928f69813f00517dc8a28f58aab89fc98ecc358dd4ca7fb38'),
+    ('hr','8b8cfb761344adb347b244c68984e0ec0566407a9d79d89b8cb6beaf0b372f62','f67085e03183d79e8c932b59c92e5de213f01aab8342d471f3630c52e52c04fe'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
-    # Recorded from approved pre-change commit71bca59, not current expectations.
+    # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0 (classic exposes
+    # hiring `description` + funding `date_basis` default, shared prop text on hr). Not current expectations.
     digest=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=True).encode()).hexdigest()
     assert digest(entry._tools_for_profile(profile))==tools_hash
     assert digest(asyncio.run(entry._handle_jsonrpc({'id':1,'method':'initialize'},'key',profile)))==init_hash

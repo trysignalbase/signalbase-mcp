@@ -303,7 +303,7 @@ def test_initialize():
     resp = _rpc("initialize", {"protocolVersion": "2025-03-26"})
     result = resp["result"]
     assert result["protocolVersion"] == entry.PROTOCOL_VERSION
-    assert result["serverInfo"] == {"name": "signalbase-mcp", "version": "1.1.0"}
+    assert result["serverInfo"] == {"name": "signalbase-mcp", "version": "1.2.0"}
     assert "count=true` is free" in result["instructions"] or "count=true is free" in result["instructions"].replace("`", "")
     assert "boolean as string" not in result["instructions"].lower()
     assert "84%" in result["instructions"]
