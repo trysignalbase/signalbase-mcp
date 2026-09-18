@@ -41,7 +41,7 @@ def _resolve_api_base(env=None) -> str:
     return API_BASE
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_NAME = "signalbase-mcp"
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
 
 DATE_PRESETS = [
     "today", "yesterday", "last_7d", "last_14d", "last_30d",
@@ -347,6 +347,29 @@ AMOUNT_MAX_PROP = {
     "minimum": 0,
 }
 
+# Exposed on BOTH profiles: the REST API already supports them.
+HIRING_DESCRIPTION_PROP = {
+    "type": "string",
+    "description": (
+        "Full-text search over the job description body (Postgres websearch syntax: "
+        "quoted phrases, OR, -exclusions). Use for claims written in the advert, "
+        "e.g. \"Series A\" OR \"just raised\". `search` covers company name, "
+        "industry, job title, location and city, but never the description body."
+    ),
+}
+FUNDING_DATE_BASIS_PROP = {
+    "type": "string",
+    "enum": ["announced", "occurred_at"],
+    "description": (
+        "Which date the window (dateFrom/dateTo/date_preset) applies to. Omitted "
+        "keeps the stored event date (occurred_at), which is when we recorded the "
+        "round, not when it was announced. Pass 'announced' for questions about "
+        "when a round was announced -- it uses the announcement date and falls "
+        "back to occurred_at when none is stored. Announced moves rows in BOTH "
+        "directions relative to the default, so it is opt-in."
+    ),
+}
+
 # ──────────────────────────────────────────────────────────────
 # Tool definitions
 # ──────────────────────────────────────────────────────────────
@@ -392,6 +415,7 @@ TOOLS = [
                 "dateFrom": DATE_FROM_PROP,
                 "dateTo": DATE_TO_PROP,
                 "date_preset": DATE_PRESET_PROP,
+                "date_basis": FUNDING_DATE_BASIS_PROP,
                 "sort_by": {
                     "type": "string",
                     "description": "Sort field (default occurred_at)",
@@ -553,6 +577,7 @@ TOOLS = [
                     "type": "string",
                     "description": "Free-text search across company name, industry, job title, location, and city",
                 },
+                "description": HIRING_DESCRIPTION_PROP,
                 "countries": {
                     "type": "string",
                     "description": (
@@ -829,6 +854,8 @@ marketing…) match by department so free-text hiring posts are found; exact tit
 - `team_size` (hiring) = whole-company size ranges `1-10,11-50,51-200,201-1000,1000-plus`
 - `employee_count_min/max` (funding, acquisitions, companies) = exact headcount bounds
 - `date_preset` overrides `dateFrom`/`dateTo`; absolute dates are YYYY-MM-DD
+- `date_basis` (funding) = which date the window filters. Omitted keeps the stored event date; pass `announced` when the question is about announcement dates (it both adds and drops rows, so it is opt-in)
+- `description` (hiring) = full-text search over the job advert body, Postgres websearch syntax (`"Series A" OR "just raised"`, `-intern`); `search` covers name/industry/title/location/city but never the body
 - Amounts are whole USD integers (5000000 = $5M)
 
 ## Presenting hiring results
@@ -1192,7 +1219,6 @@ def _expose_api_filters(tools):
             "investor_name": {"type": "string", "description": "Substring match on names of investors in the round."},
             "investors": {"type": "string", "description": "Comma-separated exact investor names (OR), via the investor-to-round links."},
             "investor_type": {"type": "string", "enum": ["pe", "vc"], "description": "A PE / VC investor took part in the round (participation, not ownership)."},
-            "date_basis": {"type": "string", "enum": ["announced", "occurred_at"], "description": "Date the window applies to; 'announced' uses the announcement date when recorded."},
         },
         "search_hiring_signals": {
             "include_total": {"type": "boolean", "description": "False skips full-cohort totals on data pages; pagination.totalCount is null and hasNextPage is determined with one lookahead row. Classic default keeps exact totals."},
@@ -1420,6 +1446,8 @@ def _prepare_tool_args(tool_args, tool_name: str = "", profile: str = "classic")
     if hr:
         args.setdefault("filter_version", 2)
         if tool_name == "search_funding_signals":
+            # HR-only default, unchanged since 2.0: classic callers keep the
+            # stored-event-date window their saved queries were built against.
             args.setdefault("date_basis", "announced")
         # Historical HR analysis remains available without a second flag.
         preset = args.get("date_preset")
@@ -4116,10 +4144,10 @@ def _tools_for_profile(profile):
         if tool["name"] == "search_hiring_signals":
             props["group_by_company"]["default"] = True
             props["include_expired"]["description"] = "Open postings by default. True includes history; explicit end dates/calendar presets also include history unless false is explicitly supplied."
-            props["description"] = _wf_prop("string", "Full-text job-description search.")
+            props["description"] = dict(HIRING_DESCRIPTION_PROP)
             props["exclude_company_countries"] = COUNTRIES_PROP
         if tool["name"] == "search_funding_signals":
-            props["date_basis"] = _wf_prop("string", "HR defaults to announced date (occurredAt only when no announced date exists). Stored dates are never modified.", enum=["announced", "occurred_at"], default="announced")
+            props["date_basis"] = {**FUNDING_DATE_BASIS_PROP, "default": "announced", "description": "HR defaults to announced date (occurredAt only when no announced date exists). Stored dates are never modified."}
             props["investor_name"] = _wf_prop("string", "Substring match on actual funding-round investor names.")
             props["investors"] = _wf_prop("string", "Comma-separated exact investor names, OR. Uses existing investor-to-round relationships.")
             props["investor_type"] = _wf_prop("string", "Observed round participation by PE or VC investors, not current ownership.", enum=["pe", "vc"])
