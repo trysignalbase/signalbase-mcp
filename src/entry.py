@@ -351,19 +351,22 @@ AMOUNT_MAX_PROP = {
 HIRING_DESCRIPTION_PROP = {
     "type": "string",
     "description": (
-        "Full-text search over the job description (Postgres websearch syntax: "
+        "Full-text search over the job description body (Postgres websearch syntax: "
         "quoted phrases, OR, -exclusions). Use for claims written in the advert, "
-        "e.g. \"Series A\" OR \"just raised\". Title-only matching remains `search`."
+        "e.g. \"Series A\" OR \"just raised\". `search` covers company name, "
+        "industry, job title, location and city, but never the description body."
     ),
 }
 FUNDING_DATE_BASIS_PROP = {
     "type": "string",
     "enum": ["announced", "occurred_at"],
-    "default": "announced",
     "description": (
-        "Which date the window (dateFrom/dateTo/date_preset) applies to. "
-        "'announced' (default) uses the announcement date and falls back to "
-        "occurred_at when no announced date is stored; 'occurred_at' uses the stored event date only."
+        "Which date the window (dateFrom/dateTo/date_preset) applies to. Omitted "
+        "keeps the stored event date (occurred_at), which is when we recorded the "
+        "round, not when it was announced. Pass 'announced' for questions about "
+        "when a round was announced -- it uses the announcement date and falls "
+        "back to occurred_at when none is stored. Announced moves rows in BOTH "
+        "directions relative to the default, so it is opt-in."
     ),
 }
 
@@ -851,8 +854,8 @@ marketing…) match by department so free-text hiring posts are found; exact tit
 - `team_size` (hiring) = whole-company size ranges `1-10,11-50,51-200,201-1000,1000-plus`
 - `employee_count_min/max` (funding, acquisitions, companies) = exact headcount bounds
 - `date_preset` overrides `dateFrom`/`dateTo`; absolute dates are YYYY-MM-DD
-- `date_basis` (funding) = which date the window filters: `announced` (default; falls back to occurred_at when no announced date is stored) or `occurred_at`
-- `description` (hiring) = full-text search over the job advert body, Postgres websearch syntax (`"Series A" OR "just raised"`, `-intern`); `search` stays title/company/location only
+- `date_basis` (funding) = which date the window filters. Omitted keeps the stored event date; pass `announced` when the question is about announcement dates (it both adds and drops rows, so it is opt-in)
+- `description` (hiring) = full-text search over the job advert body, Postgres websearch syntax (`"Series A" OR "just raised"`, `-intern`); `search` covers name/industry/title/location/city but never the body
 - Amounts are whole USD integers (5000000 = $5M)
 
 ## Presenting hiring results
@@ -1440,12 +1443,12 @@ def _prepare_tool_args(tool_args, tool_name: str = "", profile: str = "classic")
     """
     args = dict(tool_args or {})
     hr = profile == "hr"
-    if tool_name == "search_funding_signals" and profile in ("classic", "hr"):
-        # Announced-date windows on both profiles; the API falls back to occurred_at
-        # when no announced date is stored, so this only tightens the window.
-        args.setdefault("date_basis", "announced")
     if hr:
         args.setdefault("filter_version", 2)
+        if tool_name == "search_funding_signals":
+            # HR-only default, unchanged since 2.0: classic callers keep the
+            # stored-event-date window their saved queries were built against.
+            args.setdefault("date_basis", "announced")
         # Historical HR analysis remains available without a second flag.
         preset = args.get("date_preset")
         historical = (preset in ("yesterday", "last_week", "last_month", "last_quarter", "last_year")) if preset else bool(args.get("dateTo"))
@@ -4144,7 +4147,7 @@ def _tools_for_profile(profile):
             props["description"] = dict(HIRING_DESCRIPTION_PROP)
             props["exclude_company_countries"] = COUNTRIES_PROP
         if tool["name"] == "search_funding_signals":
-            props["date_basis"] = {**FUNDING_DATE_BASIS_PROP, "description": "HR defaults to announced date (occurredAt only when no announced date exists). Stored dates are never modified."}
+            props["date_basis"] = {**FUNDING_DATE_BASIS_PROP, "default": "announced", "description": "HR defaults to announced date (occurredAt only when no announced date exists). Stored dates are never modified."}
             props["investor_name"] = _wf_prop("string", "Substring match on actual funding-round investor names.")
             props["investors"] = _wf_prop("string", "Comma-separated exact investor names, OR. Uses existing investor-to-round relationships.")
             props["investor_type"] = _wf_prop("string", "Observed round participation by PE or VC investors, not current ownership.", enum=["pe", "vc"])

@@ -44,11 +44,7 @@ def test_original_calls_keep_complete_payload_and_one_request(monkeypatch, name,
     assert result == {"jsonrpc": "2.0", "id": 7, "result": {
         "content": [{"type": "text", "text": json.dumps(original, indent=2, default=str)}],
     }}
-    expected_params = dict(args)
-    if name == "search_funding_signals":
-        # 1.2.0: classic funding calls default to announced-date windows (server falls back to occurred_at).
-        expected_params.setdefault("date_basis", "announced")
-    assert calls == [(entry.TOOL_ENDPOINTS[name], expected_params, "test-key")]
+    assert calls == [(entry.TOOL_ENDPOINTS[name], args, "test-key")]
     assert payload == original
 
 

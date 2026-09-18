@@ -8,12 +8,13 @@ import entry
 
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
-    ('classic','9f52cafbb4e6dd7dcbdba1afbbca34ab1c996eb77290a931ccf14af0031c41fe','07aec7e538e8495928f69813f00517dc8a28f58aab89fc98ecc358dd4ca7fb38'),
-    ('hr','8b8cfb761344adb347b244c68984e0ec0566407a9d79d89b8cb6beaf0b372f62','f67085e03183d79e8c932b59c92e5de213f01aab8342d471f3630c52e52c04fe'),
+    ('classic','79a28a5c4be3b721269cf4a47ce26d57cb8a850aa31f009cedce5ee58e4ae93d','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
+    ('hr','c41d46742dece36b9d4b6065ddb52e301a4122c76f3fcc4ca55897fa77780def','f67085e03183d79e8c932b59c92e5de213f01aab8342d471f3630c52e52c04fe'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
-    # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0 (classic exposes
-    # hiring `description` + funding `date_basis` default, shared prop text on hr). Not current expectations.
+    # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0. The only schema
+    # deltas vs main are: classic gains hiring `description`, and the shared date_basis/description
+    # prop text. No default was added and no runtime arg is injected. Not current expectations.
     digest=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=True).encode()).hexdigest()
     assert digest(entry._tools_for_profile(profile))==tools_hash
     assert digest(asyncio.run(entry._handle_jsonrpc({'id':1,'method':'initialize'},'key',profile)))==init_hash
