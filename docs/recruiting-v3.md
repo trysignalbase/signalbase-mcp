@@ -1,5 +1,9 @@
 # Recruiting v3 connector
 
+This branch contains the undeployed 3.5.0 candidate contract. Release it only
+with the paired app commit. Restoring the prior generated contract rolls
+discovery and cursor semantics back to 3.4.0.
+
 Use Worker `/v3/recruiting` or app `/api/mcp/v3/recruiting/c/<token>`. Deploy the app's v3 recruiting routes first. Keyed URLs contain credentials and must not appear in logs or reports.
 
 The four tools search companies, appointments and investor participation, and retrieve evidence by ID. All search definitions and execution live in the app. The Python profile forwards POST requests and preserves the app's matches, alternatives, review items, source evidence, coverage and usage. An ordinary role search can retrieve labelled related titles without a count-mode prerequisite.
