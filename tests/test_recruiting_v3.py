@@ -76,3 +76,17 @@ def test_request_profile_accepts_original_request_without_business_filters(monke
 def test_new_criteria_cannot_be_added_to_the_request_profile():
     response=asyncio.run(entry._handle_jsonrpc({"id":3,"method":"tools/call","params":{"name":"search_companies","arguments":{"request":"Find employers","criteria":{}}}},"stub-key","recruiting_v3_request"))
     assert response["error"]["code"]==-32602
+
+
+def test_bound_violations_name_the_limit_and_the_given_size():
+    evidence = next(tool for tool in tools() if tool["name"] == "get_evidence")
+    records = [{"kind": "company", "id": f"00000000-0000-4000-8000-{i:012d}"} for i in range(11)]
+    with pytest.raises(ValueError) as excinfo:
+        validate({"records": records}, evidence["inputSchema"])
+    message = str(excinfo.value)
+    assert "arguments.records" in message and "11 items given" in message
+    assert "at most 10" in message and "Split the list" in message
+    search = next(tool for tool in tools() if tool["name"] == "search_companies")
+    with pytest.raises(ValueError) as excinfo:
+        validate({"request": "x" * 4001, "criteria": {"hiring": {}}}, search["inputSchema"])
+    assert "characters given" in str(excinfo.value) and "at most" in str(excinfo.value)

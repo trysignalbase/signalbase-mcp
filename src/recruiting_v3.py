@@ -46,18 +46,27 @@ def validate(value, schema, root=None, path="arguments"):
             if key in properties:
                 validate(item, properties[key], root, f"{path}.{key}")
     if kind == "array":
-        if len(value) < schema.get("minItems", 0) or len(value) > schema.get("maxItems", 100000):
-            raise ValueError(f"{path}: invalid item count")
+        low, high = schema.get("minItems", 0), schema.get("maxItems", 100000)
+        if len(value) < low or len(value) > high:
+            bound = f"at least {low}" if len(value) < low else f"at most {high}"
+            raise ValueError(
+                f"{path}: {len(value)} items given; this field accepts {bound}"
+                + (". Split the list across several calls" if len(value) > high else "")
+            )
         for index, item in enumerate(value):
             validate(item, schema.get("items", {}), root, f"{path}[{index}]")
     if kind == "string":
-        if len(value) < schema.get("minLength", 0) or len(value) > schema.get("maxLength", 1000000):
-            raise ValueError(f"{path}: invalid string length")
+        low, high = schema.get("minLength", 0), schema.get("maxLength", 1000000)
+        if len(value) < low or len(value) > high:
+            bound = f"at least {low}" if len(value) < low else f"at most {high}"
+            raise ValueError(f"{path}: {len(value)} characters given; this field accepts {bound}")
         if schema.get("pattern") and not re.search(schema["pattern"], value):
             raise ValueError(f"{path}: unsupported string format")
     if kind in ("integer", "number"):
-        if value < schema.get("minimum", float("-inf")) or value > schema.get("maximum", float("inf")):
-            raise ValueError(f"{path}: outside allowed numeric range")
+        low, high = schema.get("minimum", float("-inf")), schema.get("maximum", float("inf"))
+        if value < low or value > high:
+            bound = f"at least {low}" if value < low else f"at most {high}"
+            raise ValueError(f"{path}: {value} given; this field accepts {bound}")
 
 
 def tools(request_adapter=False):
