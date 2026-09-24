@@ -1721,6 +1721,21 @@ async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_ad
     return json.loads(body)
 
 
+async def _call_monitoring_v3(tool, arguments, api_key, operation_id):
+    from monitoring_contract import CONTRACT
+    base = _api_base_override or API_BASE
+    if not base.endswith("/api/v2"):
+        raise ValueError("API_BASE must end in /api/v2 to resolve monitoring v3")
+    url = base[:-len("/api/v2")] + "/api/v3/monitoring/" + tool.replace("_", "-")
+    response = await fetch(url, to_js({"method": "POST", "headers": {
+        "Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+        "Idempotency-Key": operation_id, "X-Monitoring-Contract": CONTRACT.get("contract_hash", "unversioned")}, "body": json.dumps(arguments)}, dict_converter=Object.fromEntries))
+    body = await response.text()
+    if len(body) > 4_000_000:
+        raise ValueError("Monitoring response exceeded the bounded response size")
+    return json.loads(body)
+
+
 class WorkflowError(Exception):
     pass
 
@@ -4123,6 +4138,9 @@ def _lean_response(payload, request, args):
 
 
 def _tools_for_profile(profile):
+    if profile == "monitoring_v3":
+        from monitoring_v3 import tools as monitoring_tools
+        return monitoring_tools()
     if profile in {"recruiting_v3", "recruiting_v3_request"}:
         from recruiting_v3 import tools as v3_tools
         return v3_tools(profile == "recruiting_v3_request")
@@ -4178,6 +4196,9 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
     else:
         params = raw_params
 
+    if profile == "monitoring_v3":
+        from monitoring_v3 import handle as handle_monitoring
+        return await handle_monitoring(request_body, api_key, _call_monitoring_v3)
     if profile in {"recruiting_v3", "recruiting_v3_request"}:
         from recruiting_v3 import handle as handle_v3
         request_adapter = profile == "recruiting_v3_request"
@@ -4441,7 +4462,7 @@ async def on_fetch(request, env):
         )
 
     path = urlsplit(str(request.url)).path.rstrip("/")
-    profile = "recruiting_v3_request" if path == "/v3/recruiting/request" else "recruiting_v3" if path == "/v3/recruiting" else "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
+    profile = "monitoring_v3" if path == "/v3/monitoring" else "recruiting_v3_request" if path == "/v3/recruiting/request" else "recruiting_v3" if path == "/v3/recruiting" else "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
     response, status = await _handle_body(body, api_key, profile)
     if status != 200:
         return _json_response(response, status)
