@@ -4227,7 +4227,15 @@ def _lean_response(payload, request, args):
 # one. Purely additive: every existing tool keeps its name, schema, handler and
 # description, and each profile keeps its own instructions and serverInfo.
 # /v3/monitoring stays as it is for anyone who wants monitoring on its own.
-MONITORING_HOST_PROFILES = {"hr", "recruiting_v3"}
+MONITORING_HOST_PROFILES = {"hr", "recruiting_v3", "monitoring_v3"}
+
+# The two v3 URLs serve ONE tool set: recruiting search, search_people and
+# monitoring. /v3/monitoring started as monitoring-only and /v3/recruiting had no
+# search_people, so which v3 URL a customer was given decided which tools they
+# got. Each keeps its own serverInfo name only because the app's keyed proxy
+# proves discovery by that name (V3_MONITORING_SERVER / signalbase-recruiting-v3).
+V3_UNIFIED_PROFILES = {"recruiting_v3", "monitoring_v3"}
+MONITORING_RESOURCE_URI = "signalbase://monitoring/v3/guide"
 
 # Appended to a host profile's own instructions — never replacing them — so the
 # monitoring tools carry the guidance that is not already in their descriptions.
@@ -4246,9 +4254,13 @@ MONITORING_ADDENDUM = (
     " appointments, job changes — use {people} on this same connector."
 )
 
+_V3_PEOPLE_TOOLS = (
+    "search_people for who works at a company, and search_appointments for recent appointments"
+)
 MONITORING_PEOPLE_TOOLS = {
     "hr": "find_recent_appointments and search_job_change_signals",
-    "recruiting_v3": "search_appointments",
+    "recruiting_v3": _V3_PEOPLE_TOOLS,
+    "monitoring_v3": _V3_PEOPLE_TOOLS,
 }
 
 
@@ -4266,12 +4278,12 @@ def _monitoring_tool_names():
 
 
 def _tools_for_profile(profile):
-    if profile == "monitoring_v3":
-        return _monitoring_tools()
-    if profile in {"recruiting_v3", "recruiting_v3_request"}:
+    if profile in {"recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import tools as v3_tools
         tools = v3_tools(profile == "recruiting_v3_request")
-        return [*tools, *_monitoring_tools()] if profile in MONITORING_HOST_PROFILES else tools
+        if profile in V3_UNIFIED_PROFILES:
+            tools = [*tools, deepcopy(SEARCH_PEOPLE_TOOL), *_monitoring_tools()]
+        return tools
     if profile == "hr_recruiting":
         return _recruiting_tools()
     if profile == "hr_brief":
@@ -4324,30 +4336,48 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
     else:
         params = raw_params
 
-    if profile == "monitoring_v3" or (
+    if (
         profile in MONITORING_HOST_PROFILES
         and method == "tools/call"
         and params.get("name") in _monitoring_tool_names()
+    ) or (
+        profile in V3_UNIFIED_PROFILES
+        and method == "resources/read"
+        and params.get("uri") == MONITORING_RESOURCE_URI
     ):
-        # Only tools/call is diverted on a host profile: initialize, tools/list,
-        # prompts and every other method stay with that profile's own handler,
-        # so its serverInfo and instructions are untouched.
+        # Monitoring calls, and its guide resource, go to the monitoring handler
+        # wherever they are offered. Everything else stays with the profile's
+        # own handler, so serverInfo and instructions come from there.
         from monitoring_v3 import handle as handle_monitoring
         return await handle_monitoring(request_body, api_key, _call_monitoring_v3)
-    if profile in MONITORING_HOST_PROFILES and method == "tools/list" and profile != "hr":
+    if profile in V3_UNIFIED_PROFILES and method == "tools/call" and params.get("name") == "search_people":
+        # One implementation of search_people: the /v2 path, which already
+        # knows not to inject the HR signal-search defaults into /people.
+        return await _handle_jsonrpc(request_body, api_key, "hr")
+    if profile in V3_UNIFIED_PROFILES and method == "tools/list":
         # recruiting_v3 answers tools/list inside its own handler, so the union
-        # has to be applied here; initialize and every other method still go to
-        # that handler untouched, keeping its serverInfo and instructions.
+        # has to be applied here.
         return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": _tools_for_profile(profile)}}
-    if profile in {"recruiting_v3", "recruiting_v3_request"}:
+    if profile in V3_UNIFIED_PROFILES and method == "resources/list":
+        recruiting_guide = {"uri": "signalbase://recruiting/v3/guide", "name": "Recruiting search concepts and examples", "mimeType": "application/json"}
+        monitoring_guide = {"uri": MONITORING_RESOURCE_URI, "name": "Monitoring concepts and examples", "mimeType": "application/json"}
+        # Each profile lists its own guide first, as it did before the merge,
+        # so a client that reads the first resource gets what it always got.
+        guides = [monitoring_guide, recruiting_guide] if profile == "monitoring_v3" else [recruiting_guide, monitoring_guide]
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": guides}}
+    if profile in {"recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import handle as handle_v3
         request_adapter = profile == "recruiting_v3_request"
         callback = (lambda tool, args, key, op: _call_recruiting_v3(tool, args, key, op, True)) if request_adapter else _call_recruiting_v3
         v3_response = await handle_v3(request_body, api_key, callback, request_adapter)
-        if profile in MONITORING_HOST_PROFILES and method == "initialize":
-            instructions = (v3_response.get("result") or {}).get("instructions")
-            if instructions:
-                v3_response["result"]["instructions"] = instructions + _monitoring_addendum(profile)
+        if profile in V3_UNIFIED_PROFILES and method == "initialize":
+            result = v3_response.get("result") or {}
+            if result.get("instructions"):
+                result["instructions"] = result["instructions"] + _monitoring_addendum(profile)
+            if profile == "monitoring_v3":
+                # Same tools and instructions as /v3/recruiting; only the name
+                # differs, because the app proves /v3/monitoring discovery by it.
+                result["serverInfo"] = {"name": "signalbase-monitoring-v3", "version": "1.1.0"}
         return v3_response
     if profile in {"hr_brief", "hr_recruiting"}:
         if method == "initialize":
