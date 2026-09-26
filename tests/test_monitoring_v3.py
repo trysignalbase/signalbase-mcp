@@ -155,7 +155,65 @@ def test_monitoring_path_routes_without_disturbing_existing_profiles(monkeypatch
     assert seen["profile"] == expected
 
 
-def test_monitoring_profile_does_not_leak_into_the_search_profiles():
-    for profile in ("classic", "hr", "recruiting_v3"):
+MONITORING_TOOL_NAMES = {
+    "create_monitor",
+    "list_monitors",
+    "get_monitor",
+    "update_monitor",
+    "add_monitor_targets",
+    "list_monitor_targets",
+    "remove_monitor_targets",
+}
+
+
+def test_monitoring_tools_are_served_on_the_chosen_search_profiles():
+    # /v2 and /v3/recruiting carry the monitoring tools too, so a customer with
+    # one of those connectors does not have to add a second one for monitoring.
+    for profile in ("hr", "recruiting_v3"):
         names = {t["name"] for t in rpc("tools/list", profile=profile)["result"]["tools"]}
-        assert not (names & {"create_monitor", "add_monitor_targets"}), profile
+        assert MONITORING_TOOL_NAMES <= names, profile
+
+
+def test_host_profiles_append_monitoring_guidance_without_replacing_their_own():
+    import entry
+    for profile, base, people in (
+        ("hr", entry.HR_INSTRUCTIONS, "find_recent_appointments and search_job_change_signals"),
+        ("recruiting_v3", None, "search_appointments"),
+    ):
+        text = rpc("initialize", profile=profile)["result"]["instructions"]
+        if base is not None:
+            # The profile's own instructions survive verbatim, as a prefix.
+            assert text.startswith(base)
+        # The four rules that are not already in the tool descriptions.
+        assert "before the first write of a conversation" in text
+        assert "does not replay signals" in text
+        assert "report what each one resolved to" in text
+        assert "never tell a user it has failed" in text
+        # People data is available on this same connector, so point at it.
+        assert people in text
+        # Excluded on purpose: the standalone profile's search/monitor boundary.
+        assert "not to look things up" not in text
+
+
+def test_standalone_monitoring_keeps_its_own_instructions():
+    text = rpc("initialize", profile="monitoring_v3")["result"]["instructions"]
+    assert "not to look things up" in text
+    assert "find_recent_appointments" not in text
+
+
+def test_monitoring_does_not_leak_into_the_other_profiles():
+    # Everything else keeps exactly the tools it had: the classic server, the
+    # two v2 sub-profiles, and the v3 request adapter.
+    for profile in ("classic", "hr_brief", "hr_recruiting", "recruiting_v3_request"):
+        names = {t["name"] for t in rpc("tools/list", profile=profile)["result"]["tools"]}
+        assert not (names & MONITORING_TOOL_NAMES), profile
+
+
+def test_hosting_profiles_keep_their_own_search_tools_and_identity():
+    # Additive only: the search tools and the server identity are unchanged.
+    hr = rpc("tools/list", profile="hr")["result"]["tools"]
+    assert {"search_companies", "find_hiring_companies"} <= {t["name"] for t in hr}
+    init = rpc("initialize", profile="hr")["result"]
+    assert init["serverInfo"]["name"] == "signalbase-hr-mcp"
+    v3 = rpc("tools/list", profile="recruiting_v3")["result"]["tools"]
+    assert {"search_companies", "get_evidence"} <= {t["name"] for t in v3}
