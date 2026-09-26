@@ -183,12 +183,21 @@ def test_surrounding_whitespace_does_not_break_the_key(monkeypatch):
     assert seen["api_key"] == "ff_live_abc"
 
 
-def test_a_non_bearer_header_is_reported_as_a_header_problem(monkeypatch):
-    (payload, status), seen = _fetch_with_auth("Basic dXNlcjpwYXNz", monkeypatch)
-    assert status == 401
-    assert "Bearer <api key>" in payload["error"]["message"]
-    # It must not reach the handler and fail later as a missing key.
-    assert "api_key" not in seen
+def test_a_bare_key_with_no_scheme_is_accepted(monkeypatch):
+    # Connector UIs that let someone name the header often take only the value.
+    _, seen = _fetch_with_auth("ff_live_abc", monkeypatch)
+    assert seen["api_key"] == "ff_live_abc"
+
+
+def test_an_unusable_header_still_lets_the_connection_initialize(monkeypatch):
+    # Regression: briefly this returned 401, so a client could not initialize
+    # at all and reported "couldn't connect to the server" — a header problem
+    # disguised as a reachability one. Discovery must survive a bad header.
+    for header in ("Basic dXNlcjpwYXNz", "Token ff_live_abc"):
+        (payload, status), seen = _fetch_with_auth(header, monkeypatch)
+        assert seen["api_key"] == "", header
+        assert status == 200, header
+        assert payload["result"] == {"ok": True}, header
 
 
 def test_no_header_at_all_still_reaches_the_handler_unauthenticated(monkeypatch):
