@@ -214,6 +214,31 @@
         "sort_order",
         "subcategories"
       ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/people",
+      "query_parameters": [
+        "city",
+        "company_domain",
+        "company_linkedin_url",
+        "company_size",
+        "count",
+        "country",
+        "email",
+        "exclude_countries",
+        "function",
+        "include_former",
+        "industry",
+        "limit",
+        "linkedin_url",
+        "page",
+        "person_countries",
+        "seniority",
+        "signal_date_range",
+        "signal_type",
+        "title"
+      ]
     }
   ],
   "documented_new_parameters": [
