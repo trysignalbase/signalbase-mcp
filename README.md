@@ -211,3 +211,7 @@ Configure in the Cloudflare dashboard under Workers → your worker → Settings
 # Recruiting v3
 
 The opt-in `/v3/recruiting` profile exposes `search_companies`, `search_appointments`, `search_investor_activity`, and `get_evidence`. Its business schema is generated from the app's recruiting service; the Worker no longer owns a separate set of search semantics for this profile. See [the v3 guide](docs/recruiting-v3.md). Existing profiles retain their contracts.
+
+# Monitoring v3
+
+The opt-in `/v3/monitoring` profile lets an agent manage a team's monitors: `create_monitor`, `list_monitors`, `get_monitor`, `update_monitor`, `add_monitor_targets`, `list_monitor_targets`, and `remove_monitor_targets`. These are the Worker's first write tools. Their schema is generated from the app's monitoring contract, the same way the recruiting profile's is. No tool deletes a monitor or exposes a webhook secret. See [the monitoring guide](docs/monitoring-v3.md). Keyed connector URL: `https://www.trysignalbase.com/api/mcp/v3/monitoring/c/<ff_live_key>`.
