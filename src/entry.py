@@ -2939,7 +2939,14 @@ async def _wf_verify_companies(companies, args, ledger):
 
 HQ_CITY_REASON = "Company HQ city/metro is not indexed. job_locations filters jobs and cannot substitute for HQ."
 # Job metros the API can filter (mirrors JOB_METROS in the app) and their country.
-JOB_METRO_COUNTRIES = {"san francisco bay area": "US", "bay area": "US", "sf bay area": "US", "san francisco": "US", "dubai": "AE", "berlin": "DE"}
+JOB_METRO_COUNTRIES = {
+    "san francisco bay area": "US", "bay area": "US", "sf bay area": "US", "san francisco": "US",
+    "new york city": "US", "new york": "US", "nyc": "US", "manhattan": "US",
+    "boston": "US", "washington dc": "US", "washington, dc": "US", "dc": "US",
+    "los angeles": "US", "seattle": "US", "chicago": "US", "austin": "US",
+    "london": "GB", "paris": "FR", "amsterdam": "NL", "munich": "DE", "münchen": "DE",
+    "dubai": "AE", "berlin": "DE",
+}
 WORKFLOW_ONLY_ARGS = ("company_hq_city", "as_of", "max_api_calls", "page", "count", "candidate_offset", "horizon_days", "quiet_lookback_days", "max_companies")
 
 
