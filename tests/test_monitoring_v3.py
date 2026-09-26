@@ -14,9 +14,13 @@ def rpc(method, params=None, profile="monitoring_v3"):
 
 
 def test_discovery_exposes_the_agreed_tool_set_and_its_own_server_name():
-    assert {t["name"] for t in rpc("tools/list")["result"]["tools"]} == {
+    names = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
+    # The seven monitoring tools are all still here...
+    assert {
         "create_monitor", "list_monitors", "get_monitor", "update_monitor",
-        "add_monitor_targets", "list_monitor_targets", "remove_monitor_targets"}
+        "add_monitor_targets", "list_monitor_targets", "remove_monitor_targets"} <= names
+    # ...and the name is unchanged: the app's keyed proxy proves /v3/monitoring
+    # discovery by it, so renaming would 503 every existing connector.
     assert rpc("initialize")["result"]["serverInfo"]["name"] == "signalbase-monitoring-v3"
 
 
@@ -195,10 +199,41 @@ def test_host_profiles_append_monitoring_guidance_without_replacing_their_own():
         assert "not to look things up" not in text
 
 
-def test_standalone_monitoring_keeps_its_own_instructions():
-    text = rpc("initialize", profile="monitoring_v3")["result"]["instructions"]
-    assert "not to look things up" in text
-    assert "find_recent_appointments" not in text
+def test_both_v3_urls_serve_one_tool_set():
+    # /v3/monitoring used to be monitoring-only and /v3/recruiting had no
+    # search_people, so which v3 URL a customer was handed decided what they
+    # could do. They are one place now, like /v2.
+    monitoring = {t["name"] for t in rpc("tools/list", profile="monitoring_v3")["result"]["tools"]}
+    recruiting = {t["name"] for t in rpc("tools/list", profile="recruiting_v3")["result"]["tools"]}
+    assert monitoring == recruiting
+    assert {"search_people", "search_companies", "get_evidence", "create_monitor"} <= monitoring
+
+
+def test_both_v3_urls_carry_the_same_instructions():
+    monitoring = rpc("initialize", profile="monitoring_v3")["result"]["instructions"]
+    recruiting = rpc("initialize", profile="recruiting_v3")["result"]["instructions"]
+    assert monitoring == recruiting
+    # The combined-connector guidance, not the old monitoring-only boundary.
+    assert "not to look things up" not in monitoring
+    assert "search_people for who works at a company" in monitoring
+
+
+def test_search_people_on_v3_uses_the_v2_implementation(monkeypatch):
+    seen = {}
+
+    async def api(endpoint, params, key):
+        seen["endpoint"], seen["params"] = endpoint, params
+        return {"success": True, "data": [], "pagination": {"totalCount": 0, "hasNextPage": False}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    for profile in ("recruiting_v3", "monitoring_v3"):
+        seen.clear()
+        response = rpc("tools/call", {"name": "search_people", "arguments": {"company_domain": "teero.com"}}, profile=profile)
+        assert seen["endpoint"] == "/people", profile
+        assert seen["params"]["company_domain"] == "teero.com", profile
+        # Same guard as /v2: no HR signal-search defaults on /people.
+        assert "filter_version" not in seen["params"], profile
+        assert not response["result"].get("isError"), profile
 
 
 def test_monitoring_does_not_leak_into_the_other_profiles():
