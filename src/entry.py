@@ -4227,14 +4227,22 @@ def _lean_response(payload, request, args):
 # one. Purely additive: every existing tool keeps its name, schema, handler and
 # description, and each profile keeps its own instructions and serverInfo.
 # /v3/monitoring stays as it is for anyone who wants monitoring on its own.
-MONITORING_HOST_PROFILES = {"hr", "recruiting_v3", "monitoring_v3"}
+MONITORING_HOST_PROFILES = {"hr", "recruiting_v3", "monitoring_v3", "v3"}
 
 # The two v3 URLs serve ONE tool set: recruiting search, search_people and
 # monitoring. /v3/monitoring started as monitoring-only and /v3/recruiting had no
 # search_people, so which v3 URL a customer was given decided which tools they
 # got. Each keeps its own serverInfo name only because the app's keyed proxy
 # proves discovery by that name (V3_MONITORING_SERVER / signalbase-recruiting-v3).
-V3_UNIFIED_PROFILES = {"recruiting_v3", "monitoring_v3"}
+V3_UNIFIED_PROFILES = {"v3", "recruiting_v3", "monitoring_v3"}
+# /v3 is THE v3 URL. /v3/recruiting and /v3/monitoring predate it and are kept
+# as silent aliases so connectors already pointed at them keep working; they are
+# no longer documented. Server name per path, because the app's keyed proxy
+# proves discovery by name for each route.
+V3_SERVER_NAMES = {
+    "v3": "signalbase-v3",
+    "monitoring_v3": "signalbase-monitoring-v3",
+}
 MONITORING_RESOURCE_URI = "signalbase://monitoring/v3/guide"
 
 # Appended to a host profile's own instructions — never replacing them — so the
@@ -4261,6 +4269,7 @@ MONITORING_PEOPLE_TOOLS = {
     "hr": "find_recent_appointments and search_job_change_signals",
     "recruiting_v3": _V3_PEOPLE_TOOLS,
     "monitoring_v3": _V3_PEOPLE_TOOLS,
+    "v3": _V3_PEOPLE_TOOLS,
 }
 
 
@@ -4278,7 +4287,7 @@ def _monitoring_tool_names():
 
 
 def _tools_for_profile(profile):
-    if profile in {"recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
+    if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import tools as v3_tools
         tools = v3_tools(profile == "recruiting_v3_request")
         if profile in V3_UNIFIED_PROFILES:
@@ -4365,7 +4374,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         # so a client that reads the first resource gets what it always got.
         guides = [monitoring_guide, recruiting_guide] if profile == "monitoring_v3" else [recruiting_guide, monitoring_guide]
         return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": guides}}
-    if profile in {"recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
+    if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import handle as handle_v3
         request_adapter = profile == "recruiting_v3_request"
         callback = (lambda tool, args, key, op: _call_recruiting_v3(tool, args, key, op, True)) if request_adapter else _call_recruiting_v3
@@ -4374,10 +4383,10 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
             result = v3_response.get("result") or {}
             if result.get("instructions"):
                 result["instructions"] = result["instructions"] + _monitoring_addendum(profile)
-            if profile == "monitoring_v3":
-                # Same tools and instructions as /v3/recruiting; only the name
-                # differs, because the app proves /v3/monitoring discovery by it.
-                result["serverInfo"] = {"name": "signalbase-monitoring-v3", "version": "1.1.0"}
+            if profile in V3_SERVER_NAMES:
+                # Same tools and instructions on every v3 path; only the name
+                # differs, because the app proves discovery by it per route.
+                result["serverInfo"] = {"name": V3_SERVER_NAMES[profile], "version": "1.1.0"}
         return v3_response
     if profile in {"hr_brief", "hr_recruiting"}:
         if method == "initialize":
@@ -4652,7 +4661,7 @@ async def on_fetch(request, env):
         )
 
     path = urlsplit(str(request.url)).path.rstrip("/")
-    profile = "monitoring_v3" if path == "/v3/monitoring" else "recruiting_v3_request" if path == "/v3/recruiting/request" else "recruiting_v3" if path == "/v3/recruiting" else "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
+    profile = "v3" if path == "/v3" else "monitoring_v3" if path == "/v3/monitoring" else "recruiting_v3_request" if path == "/v3/recruiting/request" else "recruiting_v3" if path == "/v3/recruiting" else "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
     response, status = await _handle_body(body, api_key, profile)
     if status != 200:
         return _json_response(response, status)
