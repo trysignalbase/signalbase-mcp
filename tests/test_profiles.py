@@ -148,3 +148,50 @@ def test_slow_country_probe_preserves_combined_count(monkeypatch):
 @pytest.mark.parametrize("count", [False, "false", "yes", "TRUE", 1])
 def test_non_free_count_values_cannot_trigger_extra_requests(count):
     assert entry._country_breakdown_plan({"countries": "US,GB", "count": count}) is None
+
+
+# ── Authorization header parsing ──────────────────────────────────────────
+# The scheme used to be matched as the literal "Bearer ", so a client sending
+# "bearer" (which RFC 7235 permits — the scheme is case-insensitive) had its
+# key dropped and got "API key required", as if it had sent nothing.
+
+def _fetch_with_auth(header, monkeypatch):
+    async def body():
+        return json.dumps({"id": 9, "method": "initialize"})
+
+    seen = {}
+
+    async def jsonrpc(request_body, api_key, profile="classic"):
+        seen["api_key"] = api_key
+        return {"jsonrpc": "2.0", "id": 9, "result": {"ok": True}}
+
+    monkeypatch.setattr(entry, "_json_response", lambda value, status=200: (value, status))
+    monkeypatch.setattr(entry, "_handle_jsonrpc", jsonrpc)
+    headers = {} if header is None else {"Authorization": header}
+    request = SimpleNamespace(url="https://mcp.example/v2", method="POST", headers=headers, text=body)
+    return asyncio.run(entry.on_fetch(request, None)), seen
+
+
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER", "BeArEr"])
+def test_bearer_scheme_is_case_insensitive(scheme, monkeypatch):
+    _, seen = _fetch_with_auth(f"{scheme} ff_live_abc", monkeypatch)
+    assert seen["api_key"] == "ff_live_abc"
+
+
+def test_surrounding_whitespace_does_not_break_the_key(monkeypatch):
+    _, seen = _fetch_with_auth("  Bearer   ff_live_abc  ", monkeypatch)
+    assert seen["api_key"] == "ff_live_abc"
+
+
+def test_a_non_bearer_header_is_reported_as_a_header_problem(monkeypatch):
+    (payload, status), seen = _fetch_with_auth("Basic dXNlcjpwYXNz", monkeypatch)
+    assert status == 401
+    assert "Bearer <api key>" in payload["error"]["message"]
+    # It must not reach the handler and fail later as a missing key.
+    assert "api_key" not in seen
+
+
+def test_no_header_at_all_still_reaches_the_handler_unauthenticated(monkeypatch):
+    # Discovery works without a key, so absence of a header is not an error here.
+    _, seen = _fetch_with_auth(None, monkeypatch)
+    assert seen["api_key"] == ""
