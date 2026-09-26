@@ -19,7 +19,11 @@ def rpc(method, params=None):
 
 
 def test_generated_discovery_has_entity_tools_and_scoped_title_lookup():
-    assert {t["name"] for t in rpc("tools/list")["result"]["tools"]} == {"search_companies", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options"}
+    # The profile also serves the monitoring tools (see test_monitoring_v3), so
+    # assert its own five are intact rather than that nothing else is present.
+    names = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
+    assert {"search_companies", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options"} <= names
+    assert not (names - {"search_companies", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options"} - {t["name"] for t in entry._monitoring_tools()})
     assert rpc("initialize")["result"]["serverInfo"]["name"] == "signalbase-recruiting-v3"
     resource = rpc("resources/read", {"uri": "signalbase://recruiting/v3/guide"})
     assert "examples" in resource["result"]["contents"][0]["text"]

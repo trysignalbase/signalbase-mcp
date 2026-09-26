@@ -4137,13 +4137,56 @@ def _lean_response(payload, request, args):
     return result
 
 
+# Search profiles that ALSO serve the monitoring tools, so a customer who
+# already has one of these connectors gains monitoring without adding a second
+# one. Purely additive: every existing tool keeps its name, schema, handler and
+# description, and each profile keeps its own instructions and serverInfo.
+# /v3/monitoring stays as it is for anyone who wants monitoring on its own.
+MONITORING_HOST_PROFILES = {"hr", "recruiting_v3"}
+
+# Appended to a host profile's own instructions — never replacing them — so the
+# monitoring tools carry the guidance that is not already in their descriptions.
+# Deliberately NOT included: the "monitor, don't search" boundary from the
+# standalone profile. On a combined connector both tool sets are meant to be
+# used freely, so that line would work against the point of merging them.
+# {people} names the people-search tools that live on the same connector.
+MONITORING_ADDENDUM = (
+    " Monitoring tools on this connector change a customer's account: confirm the monitor and the"
+    " list with the user before the first write of a conversation. Adding a company is"
+    " forward-looking — it does not replay signals the company already has; use the search tools"
+    " here for history. When you add targets, report what each one resolved to, naming the matched"
+    " company, and say which are still pending. A pending target is matched by automatic research"
+    " within minutes to hours and re-checked nightly; never tell a user it has failed or ask them"
+    " to re-add it. A monitor delivers company-level signals; for people — decision-makers, new"
+    " appointments, job changes — use {people} on this same connector."
+)
+
+MONITORING_PEOPLE_TOOLS = {
+    "hr": "find_recent_appointments and search_job_change_signals",
+    "recruiting_v3": "search_appointments",
+}
+
+
+def _monitoring_addendum(profile):
+    return MONITORING_ADDENDUM.format(people=MONITORING_PEOPLE_TOOLS[profile])
+
+
+def _monitoring_tools():
+    from monitoring_v3 import tools as monitoring_tools
+    return monitoring_tools()
+
+
+def _monitoring_tool_names():
+    return {tool["name"] for tool in _monitoring_tools()}
+
+
 def _tools_for_profile(profile):
     if profile == "monitoring_v3":
-        from monitoring_v3 import tools as monitoring_tools
-        return monitoring_tools()
+        return _monitoring_tools()
     if profile in {"recruiting_v3", "recruiting_v3_request"}:
         from recruiting_v3 import tools as v3_tools
-        return v3_tools(profile == "recruiting_v3_request")
+        tools = v3_tools(profile == "recruiting_v3_request")
+        return [*tools, *_monitoring_tools()] if profile in MONITORING_HOST_PROFILES else tools
     if profile == "hr_recruiting":
         return _recruiting_tools()
     if profile == "hr_brief":
@@ -4173,7 +4216,7 @@ def _tools_for_profile(profile):
             props["categories"] = CATEGORIES_PIPE_PROP
             props["subcategories"] = SUBCATEGORIES_PROP
     # The workflow tools are exclusive to HR v2; classic clients keep their six tools.
-    return deepcopy(HR_WORKFLOW_TOOLS) + tools
+    return deepcopy(HR_WORKFLOW_TOOLS) + tools + _monitoring_tools()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -4196,14 +4239,31 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
     else:
         params = raw_params
 
-    if profile == "monitoring_v3":
+    if profile == "monitoring_v3" or (
+        profile in MONITORING_HOST_PROFILES
+        and method == "tools/call"
+        and params.get("name") in _monitoring_tool_names()
+    ):
+        # Only tools/call is diverted on a host profile: initialize, tools/list,
+        # prompts and every other method stay with that profile's own handler,
+        # so its serverInfo and instructions are untouched.
         from monitoring_v3 import handle as handle_monitoring
         return await handle_monitoring(request_body, api_key, _call_monitoring_v3)
+    if profile in MONITORING_HOST_PROFILES and method == "tools/list" and profile != "hr":
+        # recruiting_v3 answers tools/list inside its own handler, so the union
+        # has to be applied here; initialize and every other method still go to
+        # that handler untouched, keeping its serverInfo and instructions.
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": _tools_for_profile(profile)}}
     if profile in {"recruiting_v3", "recruiting_v3_request"}:
         from recruiting_v3 import handle as handle_v3
         request_adapter = profile == "recruiting_v3_request"
         callback = (lambda tool, args, key, op: _call_recruiting_v3(tool, args, key, op, True)) if request_adapter else _call_recruiting_v3
-        return await handle_v3(request_body, api_key, callback, request_adapter)
+        v3_response = await handle_v3(request_body, api_key, callback, request_adapter)
+        if profile in MONITORING_HOST_PROFILES and method == "initialize":
+            instructions = (v3_response.get("result") or {}).get("instructions")
+            if instructions:
+                v3_response["result"]["instructions"] = instructions + _monitoring_addendum(profile)
+        return v3_response
     if profile in {"hr_brief", "hr_recruiting"}:
         if method == "initialize":
             recruiting = profile == "hr_recruiting"
@@ -4256,7 +4316,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
                 "name": "signalbase-hr-mcp" if profile == "hr" else SERVER_NAME,
                 "version": "2.0.0" if profile == "hr" else SERVER_VERSION,
             },
-            "instructions": HR_INSTRUCTIONS if profile == "hr" else INSTRUCTIONS,
+            "instructions": (HR_INSTRUCTIONS + _monitoring_addendum("hr")) if profile == "hr" else INSTRUCTIONS,
         }
 
     elif method == "notifications/initialized":

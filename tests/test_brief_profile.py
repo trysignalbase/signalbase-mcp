@@ -9,10 +9,13 @@ import entry
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
     ('classic','79a28a5c4be3b721269cf4a47ce26d57cb8a850aa31f009cedce5ee58e4ae93d','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
-    ('hr','c41d46742dece36b9d4b6065ddb52e301a4122c76f3fcc4ca55897fa77780def','f67085e03183d79e8c932b59c92e5de213f01aab8342d471f3630c52e52c04fe'),
+    ('hr','efb21546b1dfb2ba5865bbc0ba0f930d2fdfb510032c8a49a726e62395b4ca77','0b6d02355eae750905502d43ddacc207e98f7e6a733c2aa7998e2f1bca2f9836'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
-    # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0. The only schema
+    # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0, and the hr tools
+    # hash re-recorded again when the monitoring tools were added to /v2 (initialize is
+    # re-recorded there: same serverInfo, tool list grew, and the monitoring addendum is appended
+    # after the existing HR text). The only schema
     # deltas vs main are: classic gains hiring `description`, and the shared date_basis/description
     # prop text. No default was added and no runtime arg is injected. Not current expectations.
     digest=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=True).encode()).hexdigest()
