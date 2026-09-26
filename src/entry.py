@@ -4506,10 +4506,30 @@ async def on_fetch(request, env):
             405,
         )
 
-    auth_header = request.headers.get("Authorization") or ""
+    auth_header = (request.headers.get("Authorization") or "").strip()
     api_key = ""
-    if auth_header.startswith("Bearer "):
-        api_key = auth_header[7:].strip()
+    # RFC 7235 makes the auth scheme case-insensitive, so accept "bearer" and
+    # "BEARER" too. Matching only "Bearer " dropped the credential silently for
+    # clients that lowercase it, and the call then failed as though no key had
+    # been sent at all — pointing people at a missing key instead of a header
+    # they had actually supplied.
+    scheme, _, credential = auth_header.partition(" ")
+    if scheme.lower() == "bearer":
+        api_key = credential.strip()
+    elif auth_header:
+        # A header was sent, but it is not a Bearer credential. Say so here
+        # rather than letting it fall through to "API key required".
+        return _json_response(
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32602,
+                    "message": "Authorization header must be 'Bearer <api key>'. The scheme is case-insensitive; the key follows it after a single space.",
+                },
+            },
+            401,
+        )
 
     try:
         import json as json_mod
