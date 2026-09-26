@@ -252,3 +252,48 @@ def test_hosting_profiles_keep_their_own_search_tools_and_identity():
     assert init["serverInfo"]["name"] == "signalbase-hr-mcp"
     v3 = rpc("tools/list", profile="recruiting_v3")["result"]["tools"]
     assert {"search_companies", "get_evidence"} <= {t["name"] for t in v3}
+
+
+# ── /v3 is the single v3 URL ──────────────────────────────────────────────
+# A bare /v3 used to fall through to the classic profile, so the obvious v3
+# URL served the smallest tool set there is (6 tools, no monitoring, no
+# search_people). /v3/recruiting and /v3/monitoring remain as silent aliases.
+
+@pytest.mark.parametrize("path", ["/v3", "/v3/"])
+def test_bare_v3_path_serves_the_unified_profile_not_classic(path, monkeypatch):
+    async def body():
+        return json.dumps({"id": 1, "method": "initialize"})
+    from types import SimpleNamespace
+    monkeypatch.setattr(entry, "_json_response", lambda value, status=200: value)
+    request = SimpleNamespace(url="https://mcp.example" + path, method="POST", headers={}, text=body)
+    result = asyncio.run(entry.on_fetch(request, None))
+    assert result["result"]["serverInfo"]["name"] == "signalbase-v3"
+
+
+def test_v3_serves_exactly_what_the_aliases_serve():
+    canonical = {t["name"] for t in rpc("tools/list", profile="v3")["result"]["tools"]}
+    for alias in ("recruiting_v3", "monitoring_v3"):
+        assert {t["name"] for t in rpc("tools/list", profile=alias)["result"]["tools"]} == canonical, alias
+    assert {"search_people", "search_companies", "create_monitor"} <= canonical
+    instructions = rpc("initialize", profile="v3")["result"]["instructions"]
+    assert instructions == rpc("initialize", profile="recruiting_v3")["result"]["instructions"]
+
+
+def test_each_v3_path_keeps_the_name_its_app_route_checks():
+    assert rpc("initialize", profile="v3")["result"]["serverInfo"]["name"] == "signalbase-v3"
+    assert rpc("initialize", profile="monitoring_v3")["result"]["serverInfo"]["name"] == "signalbase-monitoring-v3"
+    assert rpc("initialize", profile="recruiting_v3")["result"]["serverInfo"]["name"] == "signalbase-recruiting-v3"
+
+
+def test_monitoring_calls_work_on_the_canonical_v3_url(monkeypatch):
+    # Same handler as the aliases: routed by tool name, not by path.
+    called = []
+
+    async def monitoring(tool, arguments, key, operation_id):
+        called.append(tool)
+        return {"data": {"execution_status": "succeeded", "monitors": [], "count": 0}}
+
+    monkeypatch.setattr(entry, "_call_monitoring_v3", monitoring)
+    response = rpc("tools/call", {"name": "list_monitors", "arguments": {}}, profile="v3")
+    assert called == ["list_monitors"]
+    assert not response["result"].get("isError"), response
