@@ -1125,6 +1125,7 @@ TOOL_ENDPOINTS = {
     "search_hiring_signals": "/signals/hiring",
     "search_investors": "/signals/investors",
     "search_companies": "/companies",
+    "search_people": "/people",
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -1443,7 +1444,8 @@ def _prepare_tool_args(tool_args, tool_name: str = "", profile: str = "classic")
     """
     args = dict(tool_args or {})
     hr = profile == "hr"
-    if hr:
+    people = tool_name == "search_people"
+    if hr and not people:
         args.setdefault("filter_version", 2)
         if tool_name == "search_funding_signals":
             # HR-only default, unchanged since 2.0: classic callers keep the
@@ -1456,7 +1458,7 @@ def _prepare_tool_args(tool_args, tool_name: str = "", profile: str = "classic")
             args.setdefault("include_expired", False)
     verbose = _is_truthy(args.pop("verbose", not hr))
     group_by_company = _is_truthy(args.pop("group_by_company", hr and tool_name == "search_hiring_signals"))
-    by_country = _is_truthy(args.pop("by_country", hr))
+    by_country = _is_truthy(args.pop("by_country", hr and not people))
     sector = args.pop("sector", None)
     if sector and tool_name in ("search_hiring_signals", "search_job_change_signals"):
         # Raises WorkflowError for an unknown preset (returned as a tool error).
@@ -3488,6 +3490,89 @@ def _wf_tool(name, description, properties, required=()):
             "annotations": {"readOnlyHint": True, "openWorldHint": True}}
 
 
+# People at a company, or an ICP sweep across people. Wraps GET /api/v2/people,
+# which the connectors never exposed: the only people reachable through MCP were
+# those attached to a job-change signal, so "who works at teero.com" came back
+# empty even though the company's People panel lists ten.
+SEARCH_PEOPLE_TOOL = {
+    "name": "search_people",
+    "description": (
+        "Find PEOPLE — the decision-makers and contacts at a company, or an ICP sweep across "
+        "companies. Pass company_domain to get the people at one company (the usual 'who should "
+        "I contact at X?'); pass title/seniority/function with geography to browse an ICP. Every "
+        "result carries a matched_signal explaining why now (funding round, acquisition or job "
+        "change), so people whose company has no signal in the window are excluded by design. "
+        "Use this rather than search_companies, which returns companies and no people, and "
+        "rather than search_job_change_signals, which only reaches people attached to a job "
+        "change. Costs 1 credit per executed search; count=true is free."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "page": PAGE_PROP,
+            "limit": _limit_prop(100),
+            "company_domain": {
+                "type": "string",
+                "description": "Company website domain(s), comma-separated — returns the people at that company (e.g. 'teero.com'). Scheme, www. and trailing slash are normalized away.",
+            },
+            "company_linkedin_url": {
+                "type": "string",
+                "description": "Company LinkedIn URL (e.g. 'linkedin.com/company/novartis').",
+            },
+            "linkedin_url": {
+                "type": "string",
+                "description": "A person's LinkedIn profile URL (e.g. 'linkedin.com/in/jane-doe').",
+            },
+            "email": {
+                "type": "string",
+                "description": "Person email. Resolves current employees only; job-change records carry no email.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Title or comma-separated list (e.g. 'CTO,VP of Engineering'). Word-boundary matching: 'COO' does not match 'Coordinator'.",
+            },
+            "function": {
+                "type": "string",
+                "description": "Comma-separated function ids: marketing | sales | engineering | product | design | operations | finance | people | data | customer_success | growth | legal",
+            },
+            "seniority": {
+                "type": "string",
+                "description": "Comma-separated seniority ids: founder | c_level | vp | director | head | lead | manager",
+            },
+            "country": COUNTRIES_PROP,
+            "exclude_countries": EXCLUDE_COUNTRIES_PROP,
+            "city": {
+                "type": "string",
+                "description": "Free-text city match. Only job-change people carry city data, so employee-sourced rows are excluded when this is set.",
+            },
+            "company_size": {
+                "type": "string",
+                "description": "Comma-separated size bands: 1-10 | 11-50 | 51-100 | 101-250 | 251-500 | 501-1000 | 1000-plus",
+            },
+            "industry": {
+                "type": "string",
+                "description": "Industry or comma-separated list (case-insensitive exact match).",
+            },
+            "signal_type": {
+                "type": "string",
+                "description": "Optional signal type(s): funding_round | acquisition | job_change. Pins matched_signal to those types.",
+            },
+            "signal_date_range": {
+                "type": "string",
+                "description": "Lookback for the latest signal, <n><d|w|m|y> (e.g. 30d, 6m, 2y). Defaults to 12m when browsing an ICP, all-time when an identifier lookup is set.",
+            },
+            "count": COUNT_PROP,
+            "verbose": VERBOSE_PROP,
+        },
+        "additionalProperties": False,
+    },
+    "annotations": {
+        "title": "Search People",
+        "readOnlyHint": True,
+        "openWorldHint": True,
+    },
+}
+
 HR_WORKFLOW_TOOLS = [
     _wf_tool("find_recent_appointments", "Find PEOPLE newly appointed to a role, not employers advertising vacancies. Use for 'freshly appointed CFOs in FMCG'. Returns named people, employer, role, announcement/start dates and source evidence. Do not use for 'companies hiring a new CFO', which asks for vacancies.", {
         **{k: WF_HIRING_PROPS[k] for k in ("role", "sector", "as_of", "max_api_calls", "page", "page_size", "verbose")},
@@ -4216,7 +4301,7 @@ def _tools_for_profile(profile):
             props["categories"] = CATEGORIES_PIPE_PROP
             props["subcategories"] = SUBCATEGORIES_PROP
     # The workflow tools are exclusive to HR v2; classic clients keep their six tools.
-    return deepcopy(HR_WORKFLOW_TOOLS) + tools + _monitoring_tools()
+    return deepcopy(HR_WORKFLOW_TOOLS) + [deepcopy(SEARCH_PEOPLE_TOOL)] + tools + _monitoring_tools()
 
 
 # ──────────────────────────────────────────────────────────────

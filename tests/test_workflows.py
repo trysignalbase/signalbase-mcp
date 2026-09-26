@@ -24,7 +24,7 @@ def test_workflows_are_hr_only():
     # hr also carries the monitoring tools now; this test is about the workflow
     # tools, so set those aside rather than restating them here.
     monitoring = {t["name"] for t in entry._monitoring_tools()}
-    assert hr - classic - monitoring == {"find_hiring_companies", "find_funded_hiring_companies", "find_hiring_outlook", "research_investor_activity", "find_recent_appointments"}
+    assert hr - classic - monitoring - {"search_people"} == {"find_hiring_companies", "find_funded_hiring_companies", "find_hiring_outlook", "research_investor_activity", "find_recent_appointments"}
     assert not (classic & monitoring)
     response = asyncio.run(entry._handle_jsonrpc({"id": 1, "method": "tools/call", "params": {"name": "find_hiring_companies"}}, "key"))
     assert response["error"]["code"] == -32602
@@ -782,3 +782,51 @@ def test_chunked_ats_response_is_cancelled_at_byte_limit(monkeypatch):
     monkeypatch.setattr(entry, "TextDecoder", Decoder)
     assert asyncio.run(entry._wf_bounded_response_text(response, maximum=5)) is None
     assert reader.cancelled is True
+
+
+# ── search_people ─────────────────────────────────────────────────────────
+# GET /api/v2/people was never exposed through MCP, so the only people
+# reachable were those attached to a job-change signal: "who works at
+# teero.com" came back empty although the company had ten indexed people.
+
+def test_search_people_is_offered_on_v2_and_hits_the_people_endpoint():
+    names = {t["name"] for t in entry._tools_for_profile("hr")}
+    assert "search_people" in names
+    assert entry.TOOL_ENDPOINTS["search_people"] == "/people"
+    # Classic keeps its six tools.
+    assert "search_people" not in {t["name"] for t in entry._tools_for_profile("classic")}
+
+
+def test_search_people_looks_up_a_company_without_hr_signal_defaults():
+    # filter_version is not a parameter of /people, and the country-breakdown
+    # probes are count queries it does not serve — neither may be injected.
+    params, verbose, opts = entry._prepare_tool_args(
+        {"company_domain": "teero.com"}, "search_people", "hr"
+    )
+    assert params == {"company_domain": "teero.com"}
+    assert opts["by_country"] is False
+
+
+def test_other_hr_tools_keep_their_defaults():
+    params, _, opts = entry._prepare_tool_args({}, "search_funding_signals", "hr")
+    assert params["filter_version"] == 2
+    assert opts["by_country"] is True
+
+
+def test_search_people_reaches_the_api_with_its_filters(monkeypatch):
+    seen = {}
+
+    async def api(endpoint, params, key):
+        seen["endpoint"], seen["params"] = endpoint, params
+        return {"success": True, "data": [{"name": "Nate A.", "title": "Co-Founder & CEO"}],
+                "pagination": {"totalCount": 1, "hasNextPage": False}, "meta": {"creditsUsed": 1}}
+
+    monkeypatch.setattr(entry, "_call_api", api)
+    response = asyncio.run(entry._handle_jsonrpc(
+        {"id": 5, "method": "tools/call",
+         "params": {"name": "search_people", "arguments": {"company_domain": "teero.com"}}},
+        "key", "hr"))
+    assert seen["endpoint"] == "/people"
+    assert seen["params"]["company_domain"] == "teero.com"
+    assert "filter_version" not in seen["params"]
+    assert not response["result"].get("isError"), response
