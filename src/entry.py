@@ -4516,20 +4516,15 @@ async def on_fetch(request, env):
     scheme, _, credential = auth_header.partition(" ")
     if scheme.lower() == "bearer":
         api_key = credential.strip()
-    elif auth_header:
-        # A header was sent, but it is not a Bearer credential. Say so here
-        # rather than letting it fall through to "API key required".
-        return _json_response(
-            {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32602,
-                    "message": "Authorization header must be 'Bearer <api key>'. The scheme is case-insensitive; the key follows it after a single space.",
-                },
-            },
-            401,
-        )
+    elif auth_header and not credential:
+        # No scheme at all, just a value. Connector UIs that let someone name a
+        # header themselves often take only the value, so the key arrives bare.
+        # Accept it rather than discarding it.
+        api_key = auth_header
+    # Anything else (Basic, Token, …) leaves api_key empty and continues. It
+    # must NOT fail the request here: discovery is meant to work without a key,
+    # and a client that cannot initialize reports "couldn't connect to the
+    # server", which hides a header problem behind a reachability one.
 
     try:
         import json as json_mod
