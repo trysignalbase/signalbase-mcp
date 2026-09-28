@@ -1,6 +1,6 @@
 # Recruiting v3 connector
 
-## Local 3.7.2 candidate (28 September 2026)
+## Local 3.7.3 candidate (28 September 2026)
 
 The paired app and Worker contract is generated from the app checkout. Unified
 v3 profiles and `/v3/recruiting/request` expose `search_people` for a separate
@@ -30,6 +30,10 @@ job/source link where one exists. Nested evidence counts show what was omitted;
 use `get_evidence` for shown IDs or narrow the query. An unrepresentable page
 is uncharged and returns a same-position retry. This Worker forwards the
 app-owned response unchanged. Release it only with the paired app commit.
+Evidence lookups have the same 36 KB cap, with excerpt truncation flags and
+every requested ID/status retained. Lead indexes now distinguish total matching
+postings from displayed jobs and expose relevant growth, investor, expiry and
+employer/location flags plus evidence-fallback state.
 
 Use Worker `/v3/recruiting` or app `/api/mcp/v3/recruiting/c/<token>`. Deploy the app's v3 recruiting routes first. Keyed URLs contain credentials and must not appear in logs or reports.
 
