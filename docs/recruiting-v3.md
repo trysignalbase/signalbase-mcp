@@ -1,5 +1,28 @@
 # Recruiting v3 connector
 
+## Local 3.7.1 candidate (28 September 2026)
+
+The paired app and Worker contract is generated from the app checkout. Unified
+v3 profiles and `/v3/recruiting/request` expose `search_people` for a separate
+company lookup. A company identifier lookup can return current employees with
+`matched_signal: null` when no signal-led people match. Function, seniority,
+person-location and signal-type filters disable that fallback. Company search
+records provide a `field_coverage.people.follow_up` when a usable domain or
+LinkedIn company URL is present. Each executed people lookup costs a credit;
+`count=true` is free. The lookup is not a complete roster or org chart.
+
+The app contract now accepts 50 normalized company domains while other lists
+retain their prior limits. The Worker passes those criteria through unchanged.
+Use the exact generated contract pair during candidate verification.
+
+`preview_recruiting_search` is a free, authenticated structured candidate
+count in both recruiting profiles. It reports distinct indexed company and
+posting IDs for completed SQL scope, not qualified/live-verified matches. It
+does not invoke original-request planning or provider checks. Unsupported
+evidence/outlook/HQ-profile claims are rejected. Each paid follow-up search is
+separate. The current MCP response default remains `full`; `compact` is opt-in
+until overflow continuation validation is complete.
+
 This branch contains the undeployed 3.5.0 candidate contract. Release it only
 with the paired app commit. Restoring the prior generated contract rolls
 discovery and cursor semantics back to 3.4.0.
