@@ -36,7 +36,9 @@ postings from displayed jobs and expose relevant growth, investor, expiry and
 employer/location flags plus evidence-fallback state.
 The paired app recognizes `Munich`/`München`/`Muenchen` in German work-city
 filters and returns unknown counts after failed searches so a connector cannot
-mistake a database timeout for proof of no source.
+mistake a database timeout for proof of no source. A timed-out OR evidence
+search can return single-claim `recovery_calls` for explicitly labelled
+diagnostic alternatives.
 
 Use Worker `/v3/recruiting` or app `/api/mcp/v3/recruiting/c/<token>`. Deploy the app's v3 recruiting routes first. Keyed URLs contain credentials and must not appear in logs or reports.
 
