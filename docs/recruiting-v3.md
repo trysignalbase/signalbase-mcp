@@ -1,6 +1,6 @@
 # Recruiting v3 connector
 
-## Local 3.7.3 candidate (28 September 2026)
+## Local 3.7.4 candidate (29 September 2026)
 
 The paired app and Worker contract is generated from the app checkout. Unified
 v3 profiles and `/v3/recruiting/request` expose `search_people` for a separate
@@ -34,6 +34,9 @@ Evidence lookups have the same 36 KB cap, with excerpt truncation flags and
 every requested ID/status retained. Lead indexes now distinguish total matching
 postings from displayed jobs and expose relevant growth, investor, expiry and
 employer/location flags plus evidence-fallback state.
+The paired app recognizes `Munich`/`München`/`Muenchen` in German work-city
+filters and returns unknown counts after failed searches so a connector cannot
+mistake a database timeout for proof of no source.
 
 Use Worker `/v3/recruiting` or app `/api/mcp/v3/recruiting/c/<token>`. Deploy the app's v3 recruiting routes first. Keyed URLs contain credentials and must not appear in logs or reports.
 
