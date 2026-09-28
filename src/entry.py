@@ -618,6 +618,9 @@ TOOLS = [
                 "company_domain": COMPANY_DOMAIN_LIST_PROP,
                 "company_linkedin_url": COMPANY_LINKEDIN_LIST_PROP,
                 "categories": CATEGORIES_PIPE_PROP,
+                "exclude_company_domain": {"type": "string", "description": "Comma-separated employer domains to exclude by exact canonical domain. Applies to both count=true and result pages."},
+                "exclude_company_ids": {"type": "string", "description": "Comma-separated exact company record IDs to exclude. Applies to both counts and pages."},
+                "operator_sector": {"type": "string", "enum": ["fitness_wellness_operators"], "description": "Opt-in physical fitness/wellness operator profile mode. Maps to REST business_model; distinct from legacy categories and the Worker sector preset. Counts use the same indexed profile predicate as pages; unknown and contradictory profiles are excluded, not certified as non-operators."},
                 "subcategories": SUBCATEGORIES_PROP,
                 "positions": POSITIONS_PROP,
                 "departments": DEPARTMENTS_PROP,
@@ -1460,6 +1463,11 @@ def _prepare_tool_args(tool_args, tool_name: str = "", profile: str = "classic")
     group_by_company = _is_truthy(args.pop("group_by_company", hr and tool_name == "search_hiring_signals"))
     by_country = _is_truthy(args.pop("by_country", hr and not people))
     sector = args.pop("sector", None)
+    operator_sector = args.pop("operator_sector", None)
+    if operator_sector is not None:
+        if tool_name != "search_hiring_signals":
+            raise WorkflowError("operator_sector is supported only on search_hiring_signals")
+        args["business_model"] = operator_sector
     if sector and tool_name in ("search_hiring_signals", "search_job_change_signals"):
         # Raises WorkflowError for an unknown preset (returned as a tool error).
         sector_labels = _wf_sector_categories(sector)
@@ -1569,6 +1577,7 @@ def _group_hiring_by_company(rows):
             continue
         c = companies.setdefault(key, {
             "company": r.get("companyName"),
+            "category_match_basis": r.get("category_match_basis"),
             "hq": r.get("companyCountry"),
             "headcount": r.get("companyEmployeeCount"),
             "website": r.get("companyWebsite"),
@@ -3497,11 +3506,12 @@ def _wf_tool(name, description, properties, required=()):
 SEARCH_PEOPLE_TOOL = {
     "name": "search_people",
     "description": (
-        "Find PEOPLE — the decision-makers and contacts at a company, or an ICP sweep across "
-        "companies. Pass company_domain to get the people at one company (the usual 'who should "
-        "I contact at X?'); pass title/seniority/function with geography to browse an ICP. Every "
-        "result carries a matched_signal explaining why now (funding round, acquisition or job "
-        "change), so people whose company has no signal in the window are excluded by design. "
+        "Find indexed people at a company, or browse a signal-driven people cohort. "
+        "Pass company_domain or company_linkedin_url for a company lookup; pass "
+        "title/seniority/function with geography to browse an ICP. A company lookup with no "
+        "signal-driven results can fall back to current employee rows with matched_signal:null. "
+        "Function, seniority, person-location and signal-type filters disable this fallback. "
+        "This is not a complete staff census, a reporting-line graph or proof of a hiring manager. "
         "Use this rather than search_companies, which returns companies and no people, and "
         "rather than search_job_change_signals, which only reaches people attached to a job "
         "change. Costs 1 credit per executed search; count=true is free."
@@ -3513,7 +3523,7 @@ SEARCH_PEOPLE_TOOL = {
             "limit": _limit_prop(100),
             "company_domain": {
                 "type": "string",
-                "description": "Company website domain(s), comma-separated — returns the people at that company (e.g. 'teero.com'). Scheme, www. and trailing slash are normalized away.",
+                "description": "Company website domain(s), comma-separated, for an indexed people lookup (e.g. 'teero.com'). Scheme, www. and trailing slash are normalized away. An eligible company lookup can use current employee fallback when no signal-driven rows match.",
             },
             "company_linkedin_url": {
                 "type": "string",
@@ -4292,6 +4302,8 @@ def _tools_for_profile(profile):
         tools = v3_tools(profile == "recruiting_v3_request")
         if profile in V3_UNIFIED_PROFILES:
             tools = [*tools, deepcopy(SEARCH_PEOPLE_TOOL), *_monitoring_tools()]
+        elif profile == "recruiting_v3_request":
+            tools = [*tools, deepcopy(SEARCH_PEOPLE_TOOL)]
         return tools
     if profile == "hr_recruiting":
         return _recruiting_tools()
@@ -4359,11 +4371,11 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         # own handler, so serverInfo and instructions come from there.
         from monitoring_v3 import handle as handle_monitoring
         return await handle_monitoring(request_body, api_key, _call_monitoring_v3)
-    if profile in V3_UNIFIED_PROFILES and method == "tools/call" and params.get("name") == "search_people":
+    if profile in (*V3_UNIFIED_PROFILES, "recruiting_v3_request") and method == "tools/call" and params.get("name") == "search_people":
         # One implementation of search_people: the /v2 path, which already
         # knows not to inject the HR signal-search defaults into /people.
         return await _handle_jsonrpc(request_body, api_key, "hr")
-    if profile in V3_UNIFIED_PROFILES and method == "tools/list":
+    if profile in (*V3_UNIFIED_PROFILES, "recruiting_v3_request") and method == "tools/list":
         # recruiting_v3 answers tools/list inside its own handler, so the union
         # has to be applied here.
         return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": _tools_for_profile(profile)}}

@@ -22,8 +22,8 @@ def test_generated_discovery_has_entity_tools_and_scoped_title_lookup():
     # The profile also serves the monitoring tools (see test_monitoring_v3), so
     # assert its own five are intact rather than that nothing else is present.
     names = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
-    assert {"search_companies", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options"} <= names
-    assert not (names - {"search_companies", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options"} - {t["name"] for t in entry._monitoring_tools()} - {"search_people"})
+    assert {"search_companies", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options", "preview_recruiting_search"} <= names
+    assert not (names - {"search_companies", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options", "preview_recruiting_search"} - {t["name"] for t in entry._monitoring_tools()} - {"search_people"})
     assert rpc("initialize")["result"]["serverInfo"]["name"] == "signalbase-recruiting-v3"
     resource = rpc("resources/read", {"uri": "signalbase://recruiting/v3/guide"})
     assert "examples" in resource["result"]["contents"][0]["text"]
@@ -75,6 +75,25 @@ def test_request_profile_accepts_original_request_without_business_filters(monke
     response=asyncio.run(entry._handle_jsonrpc({"id":3,"method":"tools/call","params":{"name":"search_companies","arguments":{"request":"Small companies hiring SDRs in Dubai"}}},"stub-key","recruiting_v3_request"))
     assert not response["result"]["isError"]
     assert calls==[({"request":"Small companies hiring SDRs in Dubai"},True)]
+
+
+def test_request_profile_discovers_and_routes_people_without_monitoring_writes(monkeypatch):
+    names = {tool["name"] for tool in entry._tools_for_profile("recruiting_v3_request")}
+    assert "search_people" in names
+    assert not (names & {tool["name"] for tool in entry._monitoring_tools()})
+    people = next(tool for tool in entry._tools_for_profile("recruiting_v3_request") if tool["name"] == "search_people")
+    assert "matched_signal:null" in people["description"]
+    calls = []
+    async def api(endpoint, params, key):
+        calls.append((endpoint, params, key))
+        return {"data": [{"name": "A. Person", "matched_signal": None}], "pagination": {"totalCount": 1}}
+    monkeypatch.setattr(entry, "_call_api", api)
+    result = asyncio.run(entry._handle_jsonrpc({"id": 4, "method": "tools/call", "params": {"name": "search_people", "arguments": {"company_domain": "example.com"}}}, "stub-key", "recruiting_v3_request"))
+    assert "result" in result, result
+    assert "error" not in result, result
+    assert json.loads(result["result"]["content"][0]["text"])["data"][0]["matched_signal"] is None
+    assert calls[0][0] == "/people"
+    assert calls[0][1]["company_domain"] == "example.com"
 
 
 def test_new_criteria_cannot_be_added_to_the_request_profile():

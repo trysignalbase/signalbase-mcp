@@ -133,6 +133,31 @@ def test_compact_mode_never_decodes_urls_or_identifiers():
     assert result["data"][0] == {"jobUrl": url, "id": "x&copy;y", "title": "Sales & Marketing"}
 
 
+def test_hiring_category_basis_survives_grouped_response():
+    rows = [{
+        "companyName": "Example Gym", "companyWebsite": "https://gym.example",
+        "companyIndustry": "Fitness", "industries": "Software",
+        "title": "Studio Manager", "jobUrl": "https://gym.example/jobs/1",
+        "category_match_basis": {
+            "filter": "categories", "matched_field": "companyIndustry",
+            "company_industry": "Fitness", "job_industry": "Software",
+        },
+    }]
+    grouped = entry._group_hiring_by_company(rows)
+    assert grouped[0]["category_match_basis"]["company_industry"] == "Fitness"
+    assert grouped[0]["category_match_basis"]["job_industry"] == "Software"
+
+
+def test_operator_sector_is_an_explicit_hiring_mapping_not_the_legacy_sector_preset():
+    params, _, _ = entry._prepare_tool_args(
+        {"operator_sector": "fitness_wellness_operators", "categories": "Fitness"},
+        "search_hiring_signals", "classic",
+    )
+    assert params["business_model"] == "fitness_wellness_operators"
+    assert params["categories"] == "Fitness"
+    assert "operator_sector" not in params
+
+
 def test_slow_country_probe_preserves_combined_count(monkeypatch):
     async def stalled(*args):
         await asyncio.sleep(60)
