@@ -1,5 +1,10 @@
 # Recruiting v3 connector
 
+## Local 3.7.6 post-review candidate (29 September 2026)
+
+This generated contract pair follows the app's reviewed first-hire and
+failed-page corrections. The Worker preview-route fix from 3.7.5 is unchanged.
+
 ## Local 3.7.5 candidate (29 September 2026)
 
 The plain-request `/v3/recruiting/request` profile sends
