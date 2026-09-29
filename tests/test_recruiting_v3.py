@@ -77,6 +77,29 @@ def test_request_profile_accepts_original_request_without_business_filters(monke
     assert calls==[({"request":"Small companies hiring SDRs in Dubai"},True)]
 
 
+def test_request_profile_preview_uses_existing_structured_free_route(monkeypatch):
+    from recruiting_contract import CONTRACT
+    calls = []
+    class Response:
+        async def text(self):
+            return json.dumps({"success": True, "data": {"candidate_companies": 2}, "meta": {"creditsUsed": 0}})
+    async def fetch(url, options):
+        calls.append((url, options))
+        return Response()
+    monkeypatch.setattr(entry, "fetch", fetch)
+    monkeypatch.setattr(entry, "_api_base_override", "https://app.example.test/api/v2")
+    result = asyncio.run(entry._handle_jsonrpc({"id": 5, "method": "tools/call", "params": {
+        "name": "preview_recruiting_search", "arguments": {
+            "request": "Preview employers hiring in Munich",
+            "criteria": {"hiring": {"locations": [{"city": "Munich", "country": "DE"}]}},
+        }
+    }}, "stub-key", "recruiting_v3_request"))
+    assert not result["result"]["isError"]
+    assert json.loads(result["result"]["content"][0]["text"])["api_usage"]["creditsUsed"] == 0
+    assert calls[0][0] == "https://app.example.test/api/v3/recruiting/preview-recruiting-search"
+    assert calls[0][1]["headers"]["X-Recruiting-Contract"] == CONTRACT["contract_hash"]
+
+
 def test_request_profile_discovers_and_routes_people_without_monitoring_writes(monkeypatch):
     names = {tool["name"] for tool in entry._tools_for_profile("recruiting_v3_request")}
     assert "search_people" in names

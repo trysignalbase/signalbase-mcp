@@ -1718,11 +1718,14 @@ async def _call_api(endpoint: str, params: dict, api_key: str) -> dict:
 
 async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_adapter=False):
     from recruiting_contract import CONTRACT, REQUEST_CONTRACT
-    contract = REQUEST_CONTRACT if request_adapter else CONTRACT
+    # Preview exists only at the structured app route, including when the
+    # request-profile connector advertises it. It uses that route's hash.
+    structured_preview = tool == "preview_recruiting_search"
+    contract = REQUEST_CONTRACT if request_adapter and not structured_preview else CONTRACT
     base = _api_base_override or API_BASE
     if not base.endswith("/api/v2"):
         raise ValueError("API_BASE must end in /api/v2 to resolve recruiting v3")
-    url = base[:-len("/api/v2")] + "/api/v3/recruiting/" + ("request/" if request_adapter else "") + tool.replace("_", "-")
+    url = base[:-len("/api/v2")] + "/api/v3/recruiting/" + ("request/" if request_adapter and not structured_preview else "") + tool.replace("_", "-")
     response = await fetch(url, to_js({"method": "POST", "headers": {
         "Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
         "Idempotency-Key": operation_id, "X-Recruiting-Contract": contract.get("contract_hash", "unversioned")}, "body": json.dumps(arguments)}, dict_converter=Object.fromEntries))

@@ -1,5 +1,13 @@
 # Recruiting v3 connector
 
+## Local 3.7.5 candidate (29 September 2026)
+
+The plain-request `/v3/recruiting/request` profile sends
+`preview_recruiting_search` to the app's structured preview route with the
+structured contract hash. Search calls still use the request adapter. Preview
+remains free; the paired app bounds failed-search recovery envelopes to 36 KB.
+Both sides use the generated 3.7.5 contract pair.
+
 ## Local 3.7.4 candidate (29 September 2026)
 
 The paired app and Worker contract is generated from the app checkout. Unified
