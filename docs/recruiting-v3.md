@@ -1,12 +1,67 @@
 # Recruiting v3 connector
 
-This branch contains the undeployed 3.5.0 candidate contract. Release it only
-with the paired app commit. Restoring the prior generated contract rolls
-discovery and cursor semantics back to 3.4.0.
+## Local 3.7.7 release candidate (29 September 2026)
+
+The generated contract pair follows the app's Munich/Saxony vocabulary,
+preview rate-window and failed-search absence-shape corrections. Worker
+routing remains as verified in 3.7.6.
+
+## Local 3.7.6 post-review candidate (29 September 2026)
+
+This generated contract pair follows the app's reviewed first-hire and
+failed-page corrections. The Worker preview-route fix from 3.7.5 is unchanged.
+
+## Local 3.7.5 candidate (29 September 2026)
+
+The plain-request `/v3/recruiting/request` profile sends
+`preview_recruiting_search` to the app's structured preview route with the
+structured contract hash. Search calls still use the request adapter. Preview
+remains free; the paired app bounds failed-search recovery envelopes to 36 KB.
+Both sides use the generated 3.7.5 contract pair.
+
+## Local 3.7.4 candidate (29 September 2026)
+
+The paired app and Worker contract is generated from the app checkout. Unified
+v3 profiles and `/v3/recruiting/request` expose `search_people` for a separate
+company lookup. A company identifier lookup can return current employees with
+`matched_signal: null` when no signal-led people match. Function, seniority,
+person-location and signal-type filters disable that fallback. Company search
+records provide a `field_coverage.people.follow_up` when a usable domain or
+LinkedIn company URL is present. Each executed people lookup costs a credit;
+`count=true` is free. The lookup is not a complete roster or org chart.
+
+The app contract now accepts 50 normalized company domains while other lists
+retain their prior limits. The Worker passes those criteria through unchanged.
+Use the exact generated contract pair during candidate verification.
+
+`preview_recruiting_search` is a free, authenticated structured candidate
+count in both recruiting profiles. It reports distinct indexed company and
+posting IDs for completed SQL scope, not qualified/live-verified matches. It
+does not invoke original-request planning or provider checks. Unsupported
+evidence/outlook/HQ-profile claims are rejected. Each paid follow-up search is
+separate. The current MCP response default remains `full`; `compact` is opt-in
+until overflow continuation validation is complete.
+
+The app bounds search responses to 36 KB so connector clients can display
+them. Dense pages become a `bounded_summary` or `lead_index` with every
+returned ID, qualification status, exact continuation and a primary returned
+job/source link where one exists. Nested evidence counts show what was omitted;
+use `get_evidence` for shown IDs or narrow the query. An unrepresentable page
+is uncharged and returns a same-position retry. This Worker forwards the
+app-owned response unchanged. Release it only with the paired app commit.
+Evidence lookups have the same 36 KB cap, with excerpt truncation flags and
+every requested ID/status retained. Lead indexes now distinguish total matching
+postings from displayed jobs and expose relevant growth, investor, expiry and
+employer/location flags plus evidence-fallback state.
+The paired app recognizes `Munich`/`München`/`Muenchen` in German work-city
+filters and returns unknown counts after failed searches so a connector cannot
+mistake a database timeout for proof of no source. A timed-out OR evidence
+search can return single-claim `recovery_calls` for explicitly labelled
+diagnostic alternatives.
 
 Use Worker `/v3/recruiting` or app `/api/mcp/v3/recruiting/c/<token>`. Deploy the app's v3 recruiting routes first. Keyed URLs contain credentials and must not appear in logs or reports.
 
-The four tools search companies, appointments and investor participation, and retrieve evidence by ID. All search definitions and execution live in the app. The Python profile forwards POST requests and preserves the app's matches, alternatives, review items, source evidence, coverage and usage. An ordinary role search can retrieve labelled related titles without a count-mode prerequisite.
+The tools search companies, appointments and investor participation, and retrieve evidence by ID. All search definitions and execution live in the app. The Python profile forwards POST requests and preserves the app's matches, alternatives, review items, source evidence, coverage and usage. An ordinary role search can retrieve labelled related titles without a count-mode prerequisite. The generated instructions ask clients to cite returned links for each named lead and run one supported labelled fallback when a completed strict search yields too few matches.
 
 `request` is the original wording for audit; this structured profile also requires business `criteria`. Company HQ, work location and evidence geography remain independent. Omit hiring for company-only growth research. Historical VC/PE backing has no implicit recency. Required office/founder claims drive evidence discovery. Follow `next_call` for unfinished coverage; never report an unsearched market as empty.
 

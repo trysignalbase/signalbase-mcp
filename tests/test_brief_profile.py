@@ -8,16 +8,17 @@ import entry
 
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
-    ('classic','79a28a5c4be3b721269cf4a47ce26d57cb8a850aa31f009cedce5ee58e4ae93d','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
-    ('hr','9267602ce4de73ec82650c1f1ece6a3692e5120adb14c8fb02262ae36f20cff6','0b6d02355eae750905502d43ddacc207e98f7e6a733c2aa7998e2f1bca2f9836'),
+    ('classic','b9e8421dd4e0340a743a8e076e5906e2aacaa3e7b7708f2088181e4b689020dd','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
+    ('hr','a0d80f2517c411b3983ae69b99ed18c4a28fd09557944dcf0ca751b18e1db237','0b6d02355eae750905502d43ddacc207e98f7e6a733c2aa7998e2f1bca2f9836'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
     # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0, and the hr tools
     # hash re-recorded again when the monitoring tools were added to /v2 (initialize is
     # re-recorded there: same serverInfo, tool list grew, and the monitoring addendum is appended
     # after the existing HR text). The only schema
-    # deltas vs main are: classic gains hiring `description`, and the shared date_basis/description
-    # prop text. No default was added and no runtime arg is injected. Not current expectations.
+    # The additive hiring employer exclusions and opt-in operator_sector mapping
+    # intentionally changed tool discovery. Historical defaults and initialize
+    # payloads remain unchanged; no new runtime argument is injected.
     digest=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=True).encode()).hexdigest()
     assert digest(entry._tools_for_profile(profile))==tools_hash
     assert digest(asyncio.run(entry._handle_jsonrpc({'id':1,'method':'initialize'},'key',profile)))==init_hash
