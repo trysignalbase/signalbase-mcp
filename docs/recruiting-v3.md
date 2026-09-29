@@ -1,5 +1,11 @@
 # Recruiting v3 connector
 
+## Local 3.7.7 release candidate (29 September 2026)
+
+The generated contract pair follows the app's Munich/Saxony vocabulary,
+preview rate-window and failed-search absence-shape corrections. Worker
+routing remains as verified in 3.7.6.
+
 ## Local 3.7.6 post-review candidate (29 September 2026)
 
 This generated contract pair follows the app's reviewed first-hire and
