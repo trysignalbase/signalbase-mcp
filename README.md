@@ -61,6 +61,20 @@ Per-tool parameter tables live in [`docs/`](./docs/overview.md).
 
 Get your API key from the [Signalbase dashboard](https://www.trysignalbase.com/workspace/api). Pass it as a Bearer token in the `Authorization` header of every MCP request.
 
+Header-capable clients can also use the app endpoint
+`https://www.trysignalbase.com/api/mcp/v3` with the same Authorization header;
+the other app profiles expose the same paths with `/api/mcp` prepended.
+Legacy keyed URLs remain available. A request supplying both URL and header
+credentials must use the same key; conflicting credentials are rejected before
+any API call. Worker schema discovery on ordinary profile paths remains public,
+while data calls still require app-authorized keys.
+
+`credential_security.py` sanitizes controlled JSON/tool output and diagnostic
+objects, including encoded URLs, nested credential fields and exception text.
+This does not sanitize platform access logs or configuration files printed by
+other software. Header transport reduces new URL exposure; it does not replace
+separate log review or a separately approved key rotation.
+
 ## Setup
 
 ### Claude Desktop

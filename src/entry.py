@@ -8,6 +8,7 @@ hiring signals, investor data, and company search via MCP tools.
 import html
 import asyncio
 import json
+from credential_security import CredentialError, redact_text, request_credentials, sanitize
 import re
 import time
 from copy import deepcopy
@@ -1633,7 +1634,7 @@ def _json_response(data: dict, status: int = 200) -> Response:
     # Serialize in Python before crossing the JS bridge. Large Python integers
     # in schemas or funding records can become JS BigInt, which JSON.stringify
     # cannot serialize even though the values are valid JSON numbers.
-    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    body = json.dumps(sanitize(data), ensure_ascii=False, separators=(",", ":"))
     headers = Headers.new(to_js(
         {**CORS_HEADERS, "Content-Type": "application/json"},
         dict_converter=Object.fromEntries,
@@ -1647,7 +1648,7 @@ def _json_response(data: dict, status: int = 200) -> Response:
 def _error_result(message: str) -> dict:
     """Return an MCP tool error result."""
     return {
-        "content": [{"type": "text", "text": message}],
+        "content": [{"type": "text", "text": redact_text(message)}],
         "isError": True,
     }
 
@@ -1656,6 +1657,7 @@ def _success_result(data, verbose: bool = True, group_by_company: bool = False) 
     """Return an MCP tool success result with JSON-serialized data.
     Default: full payload, indented. Explicit verbose=false: trimmed, compact JSON."""
     import json
+    data = sanitize(data)
     if verbose:
         if group_by_company:
             data = _with_company_groups(data)
@@ -4645,25 +4647,10 @@ async def on_fetch(request, env):
             405,
         )
 
-    auth_header = (request.headers.get("Authorization") or "").strip()
-    api_key = ""
-    # RFC 7235 makes the auth scheme case-insensitive, so accept "bearer" and
-    # "BEARER" too. Matching only "Bearer " dropped the credential silently for
-    # clients that lowercase it, and the call then failed as though no key had
-    # been sent at all — pointing people at a missing key instead of a header
-    # they had actually supplied.
-    scheme, _, credential = auth_header.partition(" ")
-    if scheme.lower() == "bearer":
-        api_key = credential.strip()
-    elif auth_header and not credential:
-        # No scheme at all, just a value. Connector UIs that let someone name a
-        # header themselves often take only the value, so the key arrives bare.
-        # Accept it rather than discarding it.
-        api_key = auth_header
-    # Anything else (Basic, Token, …) leaves api_key empty and continues. It
-    # must NOT fail the request here: discovery is meant to work without a key,
-    # and a client that cannot initialize reports "couldn't connect to the
-    # server", which hides a header problem behind a reachability one.
+    try:
+        api_key, path = request_credentials(request.headers.get("Authorization"), urlsplit(str(request.url)).path)
+    except CredentialError as error:
+        return _json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": str(error)}}, error.status)
 
     try:
         import json as json_mod
@@ -4675,7 +4662,6 @@ async def on_fetch(request, env):
             400,
         )
 
-    path = urlsplit(str(request.url)).path.rstrip("/")
     profile = "v3" if path == "/v3" else "monitoring_v3" if path == "/v3/monitoring" else "recruiting_v3_request" if path == "/v3/recruiting/request" else "recruiting_v3" if path == "/v3/recruiting" else "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
     response, status = await _handle_body(body, api_key, profile)
     if status != 200:
