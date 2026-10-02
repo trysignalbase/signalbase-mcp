@@ -3513,18 +3513,13 @@ SEARCH_PEOPLE_TOOL = {
     "description": (
         "Find indexed people at a company, or browse a signal-driven people cohort. "
         "Pass company_domain or company_linkedin_url for a company lookup; pass "
-        "title/seniority/function with geography to browse an ICP. Eligible company lookups "
-        "supplement indexed results with matching current employees for every requested company; "
-        "roster-only rows have matched_signal:null. Results are deduplicated before pagination. "
+        "title/seniority/function with geography to browse an ICP. A company lookup with no "
+        "signal-driven results can fall back to current employee rows with matched_signal:null. "
         "Function, seniority, person-location and signal-type filters disable this fallback. "
         "This is not a complete staff census, a reporting-line graph or proof of a hiring manager. "
         "Use this rather than search_companies, which returns companies and no people, and "
         "rather than search_job_change_signals, which only reaches people attached to a job "
-        "change. For missing or additional contacts, use the client's own browser/search tools "
-        "when available to gather people from company team pages and public professional profiles. "
-        "Keep web-discovered contacts and source links distinct from indexed records; a title "
-        "does not prove buying authority. This guidance adds no backend search-provider call. "
-        "Costs 1 credit per executed search; count=true is free."
+        "change. Costs 1 credit per executed search; count=true is free."
     ),
     "inputSchema": {
         "type": "object",
@@ -4306,14 +4301,24 @@ def _monitoring_tool_names():
     return {tool["name"] for tool in _monitoring_tools()}
 
 
+# V3 sourcing guidance is additive; legacy discovery remains byte-stable.
+V3_SEARCH_PEOPLE_DESCRIPTION = "Find indexed people at a company, or browse a signal-driven people cohort. Pass company_domain or company_linkedin_url for a company lookup; pass title/seniority/function with geography to browse an ICP. Eligible company lookups supplement indexed results with matching current employees for every requested company; roster-only rows have matched_signal:null. Results are deduplicated before pagination. Function, seniority, person-location and signal-type filters disable this fallback. This is not a complete staff census, a reporting-line graph or proof of a hiring manager. Use this rather than search_companies, which returns companies and no people, and rather than search_job_change_signals, which only reaches people attached to a job change. For missing or additional contacts, use the client's own browser/search tools when available to gather people from company team pages and public professional profiles. Keep web-discovered contacts and source links distinct from indexed records; a title does not prove buying authority. This guidance adds no backend search-provider call. Costs 1 credit per executed search; count=true is free."
+
+
+def _v3_people_tool():
+    tool = deepcopy(SEARCH_PEOPLE_TOOL)
+    tool["description"] = V3_SEARCH_PEOPLE_DESCRIPTION
+    return tool
+
+
 def _tools_for_profile(profile):
     if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import tools as v3_tools
         tools = v3_tools(profile == "recruiting_v3_request")
         if profile in V3_UNIFIED_PROFILES:
-            tools = [*tools, deepcopy(SEARCH_PEOPLE_TOOL), *_monitoring_tools()]
+            tools = [*tools, _v3_people_tool(), *_monitoring_tools()]
         elif profile == "recruiting_v3_request":
-            tools = [*tools, deepcopy(SEARCH_PEOPLE_TOOL)]
+            tools = [*tools, _v3_people_tool()]
         return tools
     if profile == "hr_recruiting":
         return _recruiting_tools()
