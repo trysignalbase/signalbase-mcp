@@ -3513,13 +3513,18 @@ SEARCH_PEOPLE_TOOL = {
     "description": (
         "Find indexed people at a company, or browse a signal-driven people cohort. "
         "Pass company_domain or company_linkedin_url for a company lookup; pass "
-        "title/seniority/function with geography to browse an ICP. A company lookup with no "
-        "signal-driven results can fall back to current employee rows with matched_signal:null. "
+        "title/seniority/function with geography to browse an ICP. Eligible company lookups "
+        "supplement indexed results with matching current employees for every requested company; "
+        "roster-only rows have matched_signal:null. Results are deduplicated before pagination. "
         "Function, seniority, person-location and signal-type filters disable this fallback. "
         "This is not a complete staff census, a reporting-line graph or proof of a hiring manager. "
         "Use this rather than search_companies, which returns companies and no people, and "
         "rather than search_job_change_signals, which only reaches people attached to a job "
-        "change. Costs 1 credit per executed search; count=true is free."
+        "change. For missing or additional contacts, use the client's own browser/search tools "
+        "when available to gather people from company team pages and public professional profiles. "
+        "Keep web-discovered contacts and source links distinct from indexed records; a title "
+        "does not prove buying authority. This guidance adds no backend search-provider call. "
+        "Costs 1 credit per executed search; count=true is free."
     ),
     "inputSchema": {
         "type": "object",
