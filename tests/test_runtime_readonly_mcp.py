@@ -36,6 +36,7 @@ def test_actual_v3_flow_against_readonly_sql(monkeypatch):
             raw = response.read(200001)
         assert len(raw) <= 200000
         class Response:
+            status = response.status
             async def text(self):
                 return raw.decode("utf-8")
         return Response()

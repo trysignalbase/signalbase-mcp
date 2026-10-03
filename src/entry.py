@@ -1742,6 +1742,14 @@ async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_ad
     body = await response.text()
     if len(body) > 4_000_000:
         raise ValueError("Recruiting response exceeded the bounded response size")
+    if not 200 <= response.status < 300:
+        try:
+            decoded = json.loads(body)
+        except (ValueError, TypeError):
+            decoded = {"raw": body}
+        # Keep HTTP status independent of an optional application success flag.
+        # The recruiting handler retains this body and any known credit metadata.
+        return {"error": True, "status": response.status, "body": decoded}
     return json.loads(body)
 
 
@@ -4322,8 +4330,30 @@ V3_SEARCH_PEOPLE_DESCRIPTION = "Find indexed people at a company, or browse a si
 
 def _v3_people_tool():
     tool = deepcopy(SEARCH_PEOPLE_TOOL)
-    tool["description"] = V3_SEARCH_PEOPLE_DESCRIPTION
+    tool["description"] = V3_SEARCH_PEOPLE_DESCRIPTION + " For a bounded source refresh of missing title-specific contacts at one known company, use collect_company_people and inspect coverage.refresh."
     return tool
+
+
+def _v3_collect_people_tool():
+    properties = SEARCH_PEOPLE_TOOL["inputSchema"]["properties"]
+    return {
+        "name": "collect_company_people",
+        "description": (
+            "Gather missing title-specific professional contacts for one resolved company using the existing bounded collection provider, then read the same stored roster. "
+            "Pass one company_domain or company_linkedin_url and 1–10 comma-separated titles, e.g. 'QA Manager,Head of Quality Engineering'. "
+            "Existing unrelated employees do not satisfy the requested titles. Matching cached roles avoid another provider attempt. "
+            "This can update stored public employee observations. No outreach is sent. One company, one provider lead page, existing provider admission, cooldown and team quota apply. "
+            "Read coverage.refresh for attempted, unavailable, cooldown, added-row and title-scope outcomes; failures are unknown, never a staff census or proof that no manager exists. "
+            "Costs the normal one-credit people lookup; source-provider work is bounded separately. Normal stored-data lookups use search_people."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {**{name: deepcopy(properties[name]) for name in ("company_domain", "company_linkedin_url", "title")}, "limit": {**deepcopy(properties["limit"]), "maximum": 30, "default": 30}},
+            "required": ["title"],
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+    }
 
 
 def _tools_for_profile(profile):
@@ -4331,9 +4361,9 @@ def _tools_for_profile(profile):
         from recruiting_v3 import tools as v3_tools
         tools = v3_tools(profile == "recruiting_v3_request")
         if profile in V3_UNIFIED_PROFILES:
-            tools = [*tools, _v3_people_tool(), *_monitoring_tools()]
+            tools = [*tools, _v3_people_tool(), _v3_collect_people_tool(), *_monitoring_tools()]
         elif profile == "recruiting_v3_request":
-            tools = [*tools, _v3_people_tool()]
+            tools = [*tools, _v3_people_tool(), _v3_collect_people_tool()]
         return tools
     if profile == "hr_recruiting":
         return _recruiting_tools()
@@ -4402,9 +4432,43 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         from monitoring_v3 import handle as handle_monitoring
         return await handle_monitoring(request_body, api_key, _call_monitoring_v3)
     if profile in (*V3_UNIFIED_PROFILES, "recruiting_v3_request") and method == "tools/call" and params.get("name") == "search_people":
+        if isinstance(params.get("arguments"), dict) and _is_truthy(params["arguments"].get("refresh_missing", False)):
+            failed = _error_result("Use collect_company_people for a bounded source refresh. search_people reads stored data.")
+            failed["_meta"] = {"usage": {"api_calls": 0, "credits_used": 0}}
+            return {"jsonrpc": "2.0", "id": req_id, "result": failed}
         # One implementation of search_people: the /v2 path, which already
         # knows not to inject the HR signal-search defaults into /people.
         return await _handle_jsonrpc(request_body, api_key, "hr")
+    if profile in (*V3_UNIFIED_PROFILES, "recruiting_v3_request") and method == "tools/call" and params.get("name") == "collect_company_people":
+        arguments = params.get("arguments") or {}
+        try:
+            _validate_tool_arguments(_v3_collect_people_tool(), arguments, allow_unknown=False)
+            if not (arguments.get("company_domain") or arguments.get("company_linkedin_url")):
+                raise WorkflowError("Contact collection needs one company identity.")
+            if not api_key:
+                raise WorkflowError("An authenticated Signalbase API key is required.")
+        except WorkflowError as error:
+            failed = _error_result(str(error))
+            failed["_meta"] = {"usage": {"api_calls": 0, "credits_used": 0}}
+            return {"jsonrpc": "2.0", "id": req_id, "result": failed}
+        arguments = dict(arguments)
+        arguments.update({"refresh_missing": True, "page": 1, "count": False})
+        arguments.setdefault("limit", 30)
+        try:
+            payload = await _call_api("/people", arguments, api_key)
+        except Exception as error:
+            failed = _error_result(f"Contact collection request failed ({type(error).__name__}); no absence inferred.")
+            failed["_meta"] = {"usage": {"api_calls": 1, "credits_used": None, "credits_known": False}}
+            return {"jsonrpc": "2.0", "id": req_id, "result": failed}
+        if isinstance(payload, dict) and payload.get("error") is True:
+            failed = _error_result(_format_api_error(payload))
+            body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+            meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+            debit = meta.get("creditsUsed")
+            known = meta.get("creditsKnown") is not False and isinstance(debit, int) and not isinstance(debit, bool) and debit >= 0
+            failed["_meta"] = {"usage": {"api_calls": 1, "credits_used": debit if known else None, "credits_known": known}}
+            return {"jsonrpc": "2.0", "id": req_id, "result": failed}
+        return {"jsonrpc": "2.0", "id": req_id, "result": _success_result(payload, verbose=False, group_by_company=False)}
     if profile in (*V3_UNIFIED_PROFILES, "recruiting_v3_request") and method == "tools/list":
         # recruiting_v3 answers tools/list inside its own handler, so the union
         # has to be applied here.
@@ -4550,6 +4614,11 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
                     "message": f"Unknown tool: {tool_name}",
                 },
             }
+
+        if tool_name == "search_people" and isinstance(tool_args, dict) and _is_truthy(tool_args.get("refresh_missing", False)):
+            invalid = _error_result("Use collect_company_people on v3 for a bounded source refresh. search_people reads stored data.")
+            invalid["_meta"] = {"usage": {"api_calls": 0, "credits_used": 0}}
+            return {"jsonrpc": "2.0", "id": req_id, "result": invalid}
 
         if not api_key:
             result = _error_result(

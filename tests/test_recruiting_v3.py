@@ -23,7 +23,7 @@ def test_generated_discovery_has_entity_tools_and_scoped_title_lookup():
     # assert its own five are intact rather than that nothing else is present.
     names = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
     assert {"search_companies", "find_hiring_outlook", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options", "preview_recruiting_search"} <= names
-    assert not (names - {"search_companies", "find_hiring_outlook", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options", "preview_recruiting_search"} - {t["name"] for t in entry._monitoring_tools()} - {"search_people"})
+    assert not (names - {"search_companies", "find_hiring_outlook", "search_appointments", "search_investor_activity", "get_evidence", "get_recruiting_options", "preview_recruiting_search"} - {t["name"] for t in entry._monitoring_tools()} - {"search_people", "collect_company_people"})
     assert rpc("initialize")["result"]["serverInfo"]["name"] == "signalbase-recruiting-v3"
     resource = rpc("resources/read", {"uri": "signalbase://recruiting/v3/guide"})
     assert "examples" in resource["result"]["contents"][0]["text"]
@@ -81,6 +81,7 @@ def test_request_profile_preview_uses_existing_structured_free_route(monkeypatch
     from recruiting_contract import CONTRACT
     calls = []
     class Response:
+        status = 200
         async def text(self):
             return json.dumps({"success": True, "data": {"candidate_companies": 2}, "meta": {"creditsUsed": 0}})
     async def fetch(url, options):

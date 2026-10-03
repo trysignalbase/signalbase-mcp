@@ -30,6 +30,7 @@ def test_generated_routing_posting_through_mcp(monkeypatch):
         with urllib.request.urlopen(req, timeout=40) as response:
             body = response.read(4_000_001).decode()
         class Response:
+            status = response.status
             async def text(self):
                 return body
         return Response()
