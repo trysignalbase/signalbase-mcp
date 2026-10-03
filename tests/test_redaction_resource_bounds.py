@@ -10,9 +10,9 @@ import pytest
 from credential_security import redact_text, sanitize
 
 
-@pytest.mark.parametrize("prefix", ["", " ", "(URL ", "prefix: ", "\n"])
+@pytest.mark.parametrize("prefix", ["", " ", "(URL ", "prefix: ", "\n", "...", "3", ".-+3", "dsn-", "v1.2-"])
 @pytest.mark.parametrize("scheme", ["https", "postgresql", "git+ssh", "CUSTOM-1.2"])
-def test_url_authority_secrets_preserved_across_scheme_boundaries(prefix, scheme):
+def test_url_authority_secrets_redacted_across_scheme_boundaries(prefix, scheme):
     url = f"{prefix}{scheme}://user:private-value@host.test:5432/path?not_secret=yes"
     for value in (url, quote(url, safe=""), quote(quote(url, safe=""), safe="")):
         result = redact_text(value)
@@ -87,3 +87,17 @@ def test_percent_encoded_secret_field_names_are_recognized(key):
     safe = redact_text(json.dumps({key:"privateValue"}))
     assert "privateValue" not in safe
     assert list(json.loads(safe).values()) == ["[REDACTED]"]
+
+
+def test_a_noncredential_outer_scheme_does_not_consume_the_inner_scheme_delimiter():
+    for value in ("proxy://https://user:privatePassword@host.test/db", "...https://user:privatePassword@host.test/db"):
+        assert "privatePassword" not in redact_text(value)
+
+
+def test_json_depth_limit_masks_the_subtree_instead_of_returning_secrets():
+    value = {"dsn": "postgresql://user:privatePassword@host.test/db"}
+    for _ in range(80):
+        value = {"nested": value}
+    result = redact_text(json.dumps(value))
+    assert "privatePassword" not in result
+    assert "depth limit" in result

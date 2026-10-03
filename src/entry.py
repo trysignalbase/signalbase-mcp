@@ -28,6 +28,8 @@ API_BASE = "https://www.trysignalbase.com/api/v2"
 # `--var API_BASE:http://localhost:3000/api/v2` or `[env.local] vars`) so the
 # Worker can be pointed at a local checkout of the app for end-to-end testing.
 _api_base_override: str | None = None
+# Retained as a direct-dispatch test/compatibility override; HTTP requests
+# never write it and use their own ContextVar binding instead.
 _request_api_base = ContextVar("request_api_base", default=None)
 
 

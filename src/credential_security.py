@@ -14,14 +14,11 @@ SECRET_KEY = re.compile(
     re.I,
 )
 KEY = re.compile(r"^ff_live_[A-Za-z0-9]{32}$")
-# A scheme starts at a token boundary. Without it a long ordinary word can
-# restart a greedy scheme match at every character and consume quadratic CPU.
-USERINFO_URL = re.compile(
-    # Decoding can expose #, ? or quotes that were legal encoded password
-    # characters. Retain the historical broad authority boundary for masking;
-    # this is redaction, not URL validation. Parse @/: with linear string ops.
-    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)([^/\s]*)", re.I
-)
+# Literal delimiters avoid both quadratic scheme matching and blind spots
+# when a log prefix ends in digits/punctuation. This masks URL-like text; it
+# does not validate schemes. Every authority scan ends before the next ://.
+USERINFO_URL = re.compile(r"://")
+AUTHORITY_END = re.compile(r"[/\s]")
 PATHS = {
     "",
     "/v2",
@@ -38,15 +35,21 @@ def _redact_userinfo(value):
     if "://" not in value or "@" not in value:
         return value
 
-    def replace(match):
-        userinfo, separator, host = match[2].rpartition("@")
-        return (
-            match[1] + REDACTED + "@" + host
-            if separator and ":" in userinfo
-            else match[0]
-        )
-
-    return USERINFO_URL.sub(replace, value)
+    pieces = []
+    through = 0
+    for match in USERINFO_URL.finditer(value):
+        start = match.end()
+        boundary = AUTHORITY_END.search(value, start)
+        end = boundary.start() if boundary else len(value)
+        authority = value[start:end]
+        marker = authority.rfind("@")
+        if marker >= 0 and ":" in authority[:marker]:
+            pieces.extend((value[through:start], REDACTED))
+            through = start + marker
+    if not pieces:
+        return value
+    pieces.append(value[through:])
+    return "".join(pieces)
 
 
 def redact_text(text):
