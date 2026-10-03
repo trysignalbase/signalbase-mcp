@@ -53,3 +53,10 @@ def test_predispatch_rejections_are_zero_calls(monkeypatch, profile, arguments, 
     result, calls = wire(monkeypatch, profile, 200, {}, arguments, authenticated)
     assert not calls and result["isError"] is True
     assert result["_meta"]["usage"] == {"api_calls": 0, "credits_used": 0}
+
+
+def test_collection_honors_explicit_unknown_credit_metadata(monkeypatch):
+    result, calls = wire(monkeypatch, "recruiting_v3", 500, {"success": False, "error": "unavailable", "meta": {"creditsUsed": 1, "creditsKnown": False}})
+    assert len(calls) == 1 and result["isError"] is True
+    assert result["_meta"]["usage"]["credits_used"] is None
+    assert result["_meta"]["usage"]["credits_known"] is False

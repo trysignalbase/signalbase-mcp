@@ -4463,8 +4463,9 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         if isinstance(payload, dict) and payload.get("error") is True:
             failed = _error_result(_format_api_error(payload))
             body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
-            debit = (body.get("meta") or {}).get("creditsUsed")
-            known = isinstance(debit, int) and not isinstance(debit, bool) and debit >= 0
+            meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+            debit = meta.get("creditsUsed")
+            known = meta.get("creditsKnown") is not False and isinstance(debit, int) and not isinstance(debit, bool) and debit >= 0
             failed["_meta"] = {"usage": {"api_calls": 1, "credits_used": debit if known else None, "credits_known": known}}
             return {"jsonrpc": "2.0", "id": req_id, "result": failed}
         return {"jsonrpc": "2.0", "id": req_id, "result": _success_result(payload, verbose=False, group_by_company=False)}

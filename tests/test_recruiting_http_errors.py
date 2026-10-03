@@ -15,6 +15,15 @@ def test_http_failure_cannot_claim_succeeded_or_bad_numeric_debit(monkeypatch):
     assert payload["usage"] == {"credits_known": False}
 
 
+@pytest.mark.parametrize("credits", [0, 1])
+def test_app_explicit_unknown_settlement_overrides_numeric_amount(monkeypatch, credits):
+    body = {"success": False, "error": "unavailable", "meta": {"creditsUsed": credits, "creditsKnown": False}}
+    result, payload = dispatch(monkeypatch, 500, body)
+    assert result["isError"] is True
+    assert payload["api_usage"] == body["meta"]
+    assert payload["usage"] == {"credits_known": False}
+
+
 ROUTES = [
     ("recruiting_v3", "search_companies"),
     ("recruiting_v3_request", "search_companies"),

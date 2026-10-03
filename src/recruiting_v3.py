@@ -79,8 +79,10 @@ async def handle(body, api_key, call, request_adapter=False):
             usage.pop("credits_used")
             payload["usage"] = usage
         meta = payload["api_usage"] if isinstance(payload["api_usage"], dict) else {}
-        known_cost = any(isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 for value in (meta.get("creditsUsed"), usage.get("credits_used")))
+        claims_unknown = meta.get("creditsKnown") is False or usage.get("credits_known") is False
+        known_cost = not claims_unknown and any(isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 for value in (meta.get("creditsUsed"), usage.get("credits_used")))
         if not known_cost:
+            usage.pop("credits_used", None)
             payload["usage"] = {**usage, "credits_known": False}
     failed = http_error is not None or result.get("success") is False or payload.get("execution_status") == "failed"
     return response({"isError": failed, "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]})
