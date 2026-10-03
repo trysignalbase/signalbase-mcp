@@ -105,6 +105,47 @@ def request(path, method="tools/list", key=None, params=None):
     return value
 
 
+def test_overlapping_environment_bindings_do_not_cross_route_credentials(http_entry, monkeypatch):
+    calls = []
+
+    async def fetch(url, options):
+        calls.append((url, options["headers"]["Authorization"]))
+
+        class Result:
+            async def text(self):
+                return json.dumps({"success": True, "data": {"execution_status": "succeeded", "matches": []}, "meta": {"creditsUsed": 0}})
+
+        return Result()
+
+    monkeypatch.setattr(http_entry, "fetch", fetch)
+    params = {"name": "search_companies", "arguments": {"request": "Fixture lookup", "criteria": {"company": {"domains": ["fixture.test"]}}, "verify_sources": False}}
+
+    async def run():
+        entered, resume = asyncio.Event(), asyncio.Event()
+        first = request("/v3/recruiting", "tools/call", "Bearer " + KEY_A, params)
+        original_text = first.text
+
+        async def paused_text():
+            entered.set()
+            await resume.wait()
+            return await original_text()
+
+        first.text = paused_text
+        before = http_entry._current_api_base()
+        pending = asyncio.create_task(http_entry.on_fetch(first, SimpleNamespace(API_BASE="http://first.test/api/v2")))
+        await entered.wait()
+        second = await http_entry.on_fetch(request("/v3/recruiting", "tools/call", "Bearer " + KEY_B, params), SimpleNamespace(API_BASE="http://second.test/api/v2"))
+        resume.set()
+        first_response = await pending
+        assert first_response.status == second.status == 200
+        assert http_entry._current_api_base() == before
+
+    asyncio.run(run())
+    assert len(calls) == 2
+    assert calls[0][0].startswith("http://second.test/") and calls[0][1] == "Bearer " + KEY_B
+    assert calls[1][0].startswith("http://first.test/") and calls[1][1] == "Bearer " + KEY_A
+
+
 @pytest.fixture
 def http_entry(entry_module, monkeypatch):
     class Response:

@@ -14,6 +14,14 @@ SECRET_KEY = re.compile(
     re.I,
 )
 KEY = re.compile(r"^ff_live_[A-Za-z0-9]{32}$")
+# A scheme starts at a token boundary. Without it a long ordinary word can
+# restart a greedy scheme match at every character and consume quadratic CPU.
+USERINFO_URL = re.compile(
+    # Decoding can expose #, ? or quotes that were legal encoded password
+    # characters. Retain the historical broad authority boundary for masking;
+    # this is redaction, not URL validation. Parse @/: with linear string ops.
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)([^/\s]*)", re.I
+)
 PATHS = {
     "",
     "/v2",
@@ -26,24 +34,62 @@ PATHS = {
 }
 
 
+def _redact_userinfo(value):
+    if "://" not in value or "@" not in value:
+        return value
+
+    def replace(match):
+        userinfo, separator, host = match[2].rpartition("@")
+        return (
+            match[1] + REDACTED + "@" + host
+            if separator and ":" in userinfo
+            else match[0]
+        )
+
+    return USERINFO_URL.sub(replace, value)
+
+
 def redact_text(text):
     decoded = text
-    for _ in range(3):
+    userinfo_changed = False
+    for step in range(4):
+        # Parse JSON before touching URL text, so a URL authority can never
+        # consume punctuation or another field from its serialized siblings.
+        if decoded.lstrip().startswith(("{", "[")):
+            try:
+                duplicate_keys = False
+
+                def object_pairs(pairs):
+                    nonlocal duplicate_keys
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            duplicate_keys = True
+                        result[key] = value
+                    return result
+
+                parsed = json.loads(decoded, object_pairs_hook=object_pairs)
+                cleaned = sanitize(parsed)
+                # Never return a discarded duplicate value verbatim: it may
+                # contain a credential even though the last value is harmless.
+                if duplicate_keys or cleaned != parsed:
+                    return json.dumps(
+                        cleaned, ensure_ascii=False, separators=(",", ":")
+                    )
+                return decoded if userinfo_changed else text
+            except (ValueError, TypeError):
+                pass
+        # Mask credentials before percent-decoding can turn an encoded
+        # password slash/space/newline into an apparent URL boundary.
+        protected = _redact_userinfo(decoded)
+        userinfo_changed = userinfo_changed or protected != decoded
+        decoded = protected
+        if step == 3:
+            break
         next_value = unquote(decoded)
         if next_value == decoded:
             break
         decoded = next_value
-    for candidate in (text, decoded):
-        if candidate.lstrip().startswith(("{", "[")):
-            try:
-                parsed = json.loads(candidate)
-                cleaned = sanitize(parsed)
-                if cleaned != parsed:
-                    return json.dumps(
-                        cleaned, ensure_ascii=False, separators=(",", ":")
-                    )
-            except (ValueError, TypeError):
-                pass
 
     def redact(value):
         value = re.sub(r"ff_live_[A-Za-z0-9]+", REDACTED, value)
@@ -68,15 +114,10 @@ def redact_text(text):
             value,
             flags=re.I,
         )
-        return re.sub(
-            r"([a-z][a-z0-9+.-]*://)[^/@\s]+:[^/@\s]+@",
-            lambda match: match[1] + REDACTED + "@",
-            value,
-            flags=re.I,
-        )
+        return _redact_userinfo(value)
 
     safe_decoded = redact(decoded)
-    return safe_decoded if safe_decoded != decoded else redact(text)
+    return safe_decoded if userinfo_changed or text == decoded or safe_decoded != decoded else redact(text)
 
 
 def sanitize(value):
@@ -102,13 +143,20 @@ def sanitize(value):
                         depth + 1,
                     )
                 if isinstance(current, dict):
-                    return {
-                        key: REDACTED
-                        if SECRET_KEY.fullmatch(re.sub(r"[-_\s]", "", str(key)))
-                        or re.search(
-                            r"(?:^|_)(?:API_KEY|TOKEN|SECRET|SECRET_KEY|PASSWORD)$",
-                            str(key),
+                    def secret_field(key):
+                        decoded_key = str(key)
+                        for _ in range(3):
+                            next_key = unquote(decoded_key)
+                            if next_key == decoded_key:
+                                break
+                            decoded_key = next_key
+                        return SECRET_KEY.fullmatch(re.sub(r"[-_\s]", "", decoded_key)) or re.search(
+                            r"(?:^|_)(?:API_KEY|TOKEN|SECRET|SECRET_KEY|PASSWORD)$", decoded_key
                         )
+
+                    return {
+                        (redact_text(key) if isinstance(key, str) else key): REDACTED
+                        if secret_field(key)
                         else visit(item, depth + 1)
                         for key, item in current.items()
                     }

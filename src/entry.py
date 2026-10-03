@@ -7,6 +7,7 @@ hiring signals, investor data, and company search via MCP tools.
 
 import html
 import asyncio
+from contextvars import ContextVar
 import json
 from credential_security import CredentialError, redact_text, request_credentials, sanitize
 import re
@@ -27,6 +28,11 @@ API_BASE = "https://www.trysignalbase.com/api/v2"
 # `--var API_BASE:http://localhost:3000/api/v2` or `[env.local] vars`) so the
 # Worker can be pointed at a local checkout of the app for end-to-end testing.
 _api_base_override: str | None = None
+_request_api_base = ContextVar("request_api_base", default=None)
+
+
+def _current_api_base():
+    return _request_api_base.get() or _api_base_override or API_BASE
 
 
 def _resolve_api_base(env=None) -> str:
@@ -1692,7 +1698,7 @@ async def _call_api(endpoint: str, params: dict, api_key: str) -> dict:
     import json as json_mod
 
     qs = _build_query_string(params)
-    url = f"{_api_base_override or API_BASE}{endpoint}"
+    url = f"{_current_api_base()}{endpoint}"
     if qs:
         url = f"{url}?{qs}"
 
@@ -1724,7 +1730,7 @@ async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_ad
     # request-profile connector advertises it. It uses that route's hash.
     structured_preview = tool == "preview_recruiting_search"
     contract = REQUEST_CONTRACT if request_adapter and not structured_preview else CONTRACT
-    base = _api_base_override or API_BASE
+    base = _current_api_base()
     if not base.endswith("/api/v2"):
         raise ValueError("API_BASE must end in /api/v2 to resolve recruiting v3")
     url = base[:-len("/api/v2")] + "/api/v3/recruiting/" + ("request/" if request_adapter and not structured_preview else "") + tool.replace("_", "-")
@@ -1739,7 +1745,7 @@ async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_ad
 
 async def _call_monitoring_v3(tool, arguments, api_key, operation_id):
     from monitoring_contract import CONTRACT
-    base = _api_base_override or API_BASE
+    base = _current_api_base()
     if not base.endswith("/api/v2"):
         raise ValueError("API_BASE must end in /api/v2 to resolve monitoring v3")
     url = base[:-len("/api/v2")] + "/api/v3/monitoring/" + tool.replace("_", "-")
@@ -4640,8 +4646,14 @@ async def _handle_body(body, api_key: str, profile: str = "classic"):
 # ──────────────────────────────────────────────────────────────
 
 async def on_fetch(request, env):
-    global _api_base_override
-    _api_base_override = _resolve_api_base(env)
+    token = _request_api_base.set(_resolve_api_base(env))
+    try:
+        return await _on_fetch_request(request)
+    finally:
+        _request_api_base.reset(token)
+
+
+async def _on_fetch_request(request):
     if request.method == "OPTIONS":
         return Response.new("", to_js(
             {
