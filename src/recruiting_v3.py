@@ -56,9 +56,25 @@ async def handle(body, api_key, call, request_adapter=False):
     except Exception:
         payload = {"execution_status": "failed", "error": "Transport did not complete; this is not an empty search. Retry identical arguments with operation_id.", "operation_id": operation_id, "usage": {"credits_known": False}}
         return response({"isError": True, "content": [{"type": "text", "text": json.dumps(payload, separators=(",", ":"))}]})
+    http_error = None
+    if isinstance(result, dict) and result.get("error") is True and isinstance(result.get("status"), int) and not isinstance(result.get("status"), bool) and not 200 <= result["status"] < 300 and "body" in result:
+        http_error = {"status": result["status"], "body": result["body"]}
+        result = result["body"] if isinstance(result["body"], dict) else {"body": result["body"]}
+    if not isinstance(result, dict):
+        return error(-32603, "Recruiting service returned an invalid result")
     payload = result.get("data", result)
+    if http_error and not isinstance(payload, dict):
+        payload = {"body": payload}
     if not isinstance(payload, dict):
         return error(-32603, "Recruiting service returned an invalid result")
     payload = {**payload, "operation_id": operation_id, "api_usage": result.get("meta", {})}
-    failed = result.get("success") is False or payload.get("execution_status") == "failed"
+    if http_error:
+        payload["http_error"] = http_error
+        payload.setdefault("execution_status", "failed")
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        meta = payload["api_usage"] if isinstance(payload["api_usage"], dict) else {}
+        known_cost = any(isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 for value in (meta.get("creditsUsed"), usage.get("credits_used")))
+        if not known_cost:
+            payload["usage"] = {**usage, "credits_known": False}
+    failed = http_error is not None or result.get("success") is False or payload.get("execution_status") == "failed"
     return response({"isError": failed, "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]})

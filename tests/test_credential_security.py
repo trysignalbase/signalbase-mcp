@@ -112,6 +112,7 @@ def test_overlapping_environment_bindings_do_not_cross_route_credentials(http_en
         calls.append((url, options["headers"]["Authorization"]))
 
         class Result:
+            status = 200
             async def text(self):
                 return json.dumps({"success": True, "data": {"execution_status": "succeeded", "matches": []}, "meta": {"creditsUsed": 0}})
 
@@ -201,6 +202,7 @@ def test_actual_worker_transport_uses_request_key_and_rejects_conflicts_before_f
         await asyncio.sleep(0)
 
         class Result:
+            status = 200
             async def text(self):
                 if key not in (KEY_A, KEY_B):
                     return json.dumps({"success": False, "error": "invalid API key"})

@@ -1742,6 +1742,14 @@ async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_ad
     body = await response.text()
     if len(body) > 4_000_000:
         raise ValueError("Recruiting response exceeded the bounded response size")
+    if not 200 <= response.status < 300:
+        try:
+            decoded = json.loads(body)
+        except (ValueError, TypeError):
+            decoded = {"raw": body}
+        # Keep HTTP status independent of an optional application success flag.
+        # The recruiting handler retains this body and any known credit metadata.
+        return {"error": True, "status": response.status, "body": decoded}
     return json.loads(body)
 
 

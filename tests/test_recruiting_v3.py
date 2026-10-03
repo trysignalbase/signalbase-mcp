@@ -81,6 +81,7 @@ def test_request_profile_preview_uses_existing_structured_free_route(monkeypatch
     from recruiting_contract import CONTRACT
     calls = []
     class Response:
+        status = 200
         async def text(self):
             return json.dumps({"success": True, "data": {"candidate_companies": 2}, "meta": {"creditsUsed": 0}})
     async def fetch(url, options):
