@@ -4433,7 +4433,9 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         return await handle_monitoring(request_body, api_key, _call_monitoring_v3)
     if profile in (*V3_UNIFIED_PROFILES, "recruiting_v3_request") and method == "tools/call" and params.get("name") == "search_people":
         if isinstance(params.get("arguments"), dict) and _is_truthy(params["arguments"].get("refresh_missing", False)):
-            return {"jsonrpc": "2.0", "id": req_id, "result": {"isError": True, "content": [{"type": "text", "text": "Use collect_company_people for a bounded source refresh. search_people reads stored data."}]}}
+            failed = _error_result("Use collect_company_people for a bounded source refresh. search_people reads stored data.")
+            failed["_meta"] = {"usage": {"api_calls": 0, "credits_used": 0}}
+            return {"jsonrpc": "2.0", "id": req_id, "result": failed}
         # One implementation of search_people: the /v2 path, which already
         # knows not to inject the HR signal-search defaults into /people.
         return await _handle_jsonrpc(request_body, api_key, "hr")

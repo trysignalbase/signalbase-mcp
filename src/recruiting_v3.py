@@ -70,8 +70,14 @@ async def handle(body, api_key, call, request_adapter=False):
     payload = {**payload, "operation_id": operation_id, "api_usage": result.get("meta", {})}
     if http_error:
         payload["http_error"] = http_error
-        payload.setdefault("execution_status", "failed")
+        if payload.get("execution_status") in (None, "succeeded"):
+            payload["execution_status"] = "failed"
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        usage = dict(usage)
+        debit = usage.get("credits_used")
+        if "credits_used" in usage and not (isinstance(debit, (int, float)) and not isinstance(debit, bool) and debit >= 0):
+            usage.pop("credits_used")
+            payload["usage"] = usage
         meta = payload["api_usage"] if isinstance(payload["api_usage"], dict) else {}
         known_cost = any(isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 for value in (meta.get("creditsUsed"), usage.get("credits_used")))
         if not known_cost:

@@ -8,6 +8,13 @@ import entry
 from recruiting_contract import CONTRACT, REQUEST_CONTRACT
 
 
+def test_http_failure_cannot_claim_succeeded_or_bad_numeric_debit(monkeypatch):
+    result, payload = dispatch(monkeypatch, 503, {"success": True, "data": {"execution_status": "succeeded", "usage": {"credits_used": -2}}})
+    assert result["isError"] is True
+    assert payload["execution_status"] == "failed"
+    assert payload["usage"] == {"credits_known": False}
+
+
 ROUTES = [
     ("recruiting_v3", "search_companies"),
     ("recruiting_v3_request", "search_companies"),
