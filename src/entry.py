@@ -4448,7 +4448,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
             payload = await _call_api("/people", arguments, api_key)
         except Exception as error:
             failed = _error_result(f"Contact collection request failed ({type(error).__name__}); no absence inferred.")
-            failed["_meta"] = {"usage": {"api_calls": 1, "credits_used": 0, "credits_known": False}}
+            failed["_meta"] = {"usage": {"api_calls": 1, "credits_used": None, "credits_known": False}}
             return {"jsonrpc": "2.0", "id": req_id, "result": failed}
         if isinstance(payload, dict) and payload.get("error") is True:
             failed = _error_result(_format_api_error(payload))

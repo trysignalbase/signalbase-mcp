@@ -55,3 +55,16 @@ def test_collection_failure_does_not_invent_zero_credit_settlement(monkeypatch):
     response = asyncio.run(entry._handle_jsonrpc({"id": 4, "method": "tools/call", "params": {"name": "collect_company_people", "arguments": {"company_domain": "example.com", "title": "QA Manager"}}}, "stub-key", "recruiting_v3"))
     usage = response["result"]["_meta"]["usage"]
     assert usage["credits_used"] is None and usage["credits_known"] is False
+
+
+def test_collection_transport_exception_has_unknown_credit_settlement(monkeypatch):
+    calls = []
+    async def api_call(*args):
+        calls.append(args)
+        raise TimeoutError("Response lost after dispatch")
+    monkeypatch.setattr(entry, "_call_api", api_call)
+    response = asyncio.run(entry._handle_jsonrpc({"id": 5, "method": "tools/call", "params": {"name": "collect_company_people", "arguments": {"company_domain": "example.com", "title": "QA Manager"}}}, "stub-key", "recruiting_v3"))
+    assert len(calls) == 1 and response["result"]["isError"] is True
+    usage = response["result"]["_meta"]["usage"]
+    assert usage["api_calls"] == 1
+    assert usage["credits_used"] is None and usage["credits_known"] is False
