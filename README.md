@@ -61,6 +61,20 @@ Per-tool parameter tables live in [`docs/`](./docs/overview.md).
 
 Get your API key from the [Signalbase dashboard](https://www.trysignalbase.com/workspace/api). Pass it as a Bearer token in the `Authorization` header of every MCP request.
 
+Header-capable clients can also use the app endpoint
+`https://www.trysignalbase.com/api/mcp/v3` with the same Authorization header;
+the other app profiles expose the same paths with `/api/mcp` prepended.
+Legacy keyed URLs remain available. A request supplying both URL and header
+credentials must use the same key; conflicting credentials are rejected before
+any API call. Worker schema discovery on ordinary profile paths remains public,
+while data calls still require app-authorized keys.
+
+`credential_security.py` sanitizes controlled JSON/tool output and diagnostic
+objects, including encoded URLs, nested credential fields and exception text.
+This does not sanitize platform access logs or configuration files printed by
+other software. Header transport reduces new URL exposure; it does not replace
+separate log review or a separately approved key rotation.
+
 ## Setup
 
 ### Claude Desktop
@@ -211,3 +225,7 @@ Configure in the Cloudflare dashboard under Workers → your worker → Settings
 # Recruiting v3
 
 The opt-in `/v3/recruiting` profile exposes `search_companies`, `search_appointments`, `search_investor_activity`, and `get_evidence`. Its business schema is generated from the app's recruiting service; the Worker no longer owns a separate set of search semantics for this profile. See [the v3 guide](docs/recruiting-v3.md). Existing profiles retain their contracts.
+
+# Monitoring v3
+
+The opt-in `/v3/monitoring` profile lets an agent manage a team's monitors: `create_monitor`, `list_monitors`, `get_monitor`, `update_monitor`, `add_monitor_targets`, `list_monitor_targets`, and `remove_monitor_targets`. These are the Worker's first write tools. Their schema is generated from the app's monitoring contract, the same way the recruiting profile's is. No tool deletes a monitor or exposes a webhook secret. See [the monitoring guide](docs/monitoring-v3.md). Keyed connector URL: `https://www.trysignalbase.com/api/mcp/v3/monitoring/c/<ff_live_key>`.

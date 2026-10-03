@@ -133,6 +133,31 @@ def test_compact_mode_never_decodes_urls_or_identifiers():
     assert result["data"][0] == {"jobUrl": url, "id": "x&copy;y", "title": "Sales & Marketing"}
 
 
+def test_hiring_category_basis_survives_grouped_response():
+    rows = [{
+        "companyName": "Example Gym", "companyWebsite": "https://gym.example",
+        "companyIndustry": "Fitness", "industries": "Software",
+        "title": "Studio Manager", "jobUrl": "https://gym.example/jobs/1",
+        "category_match_basis": {
+            "filter": "categories", "matched_field": "companyIndustry",
+            "company_industry": "Fitness", "job_industry": "Software",
+        },
+    }]
+    grouped = entry._group_hiring_by_company(rows)
+    assert grouped[0]["category_match_basis"]["company_industry"] == "Fitness"
+    assert grouped[0]["category_match_basis"]["job_industry"] == "Software"
+
+
+def test_operator_sector_is_an_explicit_hiring_mapping_not_the_legacy_sector_preset():
+    params, _, _ = entry._prepare_tool_args(
+        {"operator_sector": "fitness_wellness_operators", "categories": "Fitness"},
+        "search_hiring_signals", "classic",
+    )
+    assert params["business_model"] == "fitness_wellness_operators"
+    assert params["categories"] == "Fitness"
+    assert "operator_sector" not in params
+
+
 def test_slow_country_probe_preserves_combined_count(monkeypatch):
     async def stalled(*args):
         await asyncio.sleep(60)
@@ -148,3 +173,59 @@ def test_slow_country_probe_preserves_combined_count(monkeypatch):
 @pytest.mark.parametrize("count", [False, "false", "yes", "TRUE", 1])
 def test_non_free_count_values_cannot_trigger_extra_requests(count):
     assert entry._country_breakdown_plan({"countries": "US,GB", "count": count}) is None
+
+
+# ── Authorization header parsing ──────────────────────────────────────────
+# The scheme used to be matched as the literal "Bearer ", so a client sending
+# "bearer" (which RFC 7235 permits — the scheme is case-insensitive) had its
+# key dropped and got "API key required", as if it had sent nothing.
+
+def _fetch_with_auth(header, monkeypatch):
+    async def body():
+        return json.dumps({"id": 9, "method": "initialize"})
+
+    seen = {}
+
+    async def jsonrpc(request_body, api_key, profile="classic"):
+        seen["api_key"] = api_key
+        return {"jsonrpc": "2.0", "id": 9, "result": {"ok": True}}
+
+    monkeypatch.setattr(entry, "_json_response", lambda value, status=200: (value, status))
+    monkeypatch.setattr(entry, "_handle_jsonrpc", jsonrpc)
+    headers = {} if header is None else {"Authorization": header}
+    request = SimpleNamespace(url="https://mcp.example/v2", method="POST", headers=headers, text=body)
+    return asyncio.run(entry.on_fetch(request, None)), seen
+
+
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER", "BeArEr"])
+def test_bearer_scheme_is_case_insensitive(scheme, monkeypatch):
+    _, seen = _fetch_with_auth(f"{scheme} ff_live_abc", monkeypatch)
+    assert seen["api_key"] == "ff_live_abc"
+
+
+def test_surrounding_whitespace_does_not_break_the_key(monkeypatch):
+    _, seen = _fetch_with_auth("  Bearer   ff_live_abc  ", monkeypatch)
+    assert seen["api_key"] == "ff_live_abc"
+
+
+def test_a_bare_key_with_no_scheme_is_accepted(monkeypatch):
+    # Connector UIs that let someone name the header often take only the value.
+    _, seen = _fetch_with_auth("ff_live_abc", monkeypatch)
+    assert seen["api_key"] == "ff_live_abc"
+
+
+def test_an_unusable_header_still_lets_the_connection_initialize(monkeypatch):
+    # Regression: briefly this returned 401, so a client could not initialize
+    # at all and reported "couldn't connect to the server" — a header problem
+    # disguised as a reachability one. Discovery must survive a bad header.
+    for header in ("Basic dXNlcjpwYXNz", "Token ff_live_abc"):
+        (payload, status), seen = _fetch_with_auth(header, monkeypatch)
+        assert seen["api_key"] == "", header
+        assert status == 200, header
+        assert payload["result"] == {"ok": True}, header
+
+
+def test_no_header_at_all_still_reaches_the_handler_unauthenticated(monkeypatch):
+    # Discovery works without a key, so absence of a header is not an error here.
+    _, seen = _fetch_with_auth(None, monkeypatch)
+    assert seen["api_key"] == ""

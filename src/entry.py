@@ -8,6 +8,7 @@ hiring signals, investor data, and company search via MCP tools.
 import html
 import asyncio
 import json
+from credential_security import CredentialError, redact_text, request_credentials, sanitize
 import re
 import time
 from copy import deepcopy
@@ -41,7 +42,7 @@ def _resolve_api_base(env=None) -> str:
     return API_BASE
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_NAME = "signalbase-mcp"
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
 
 DATE_PRESETS = [
     "today", "yesterday", "last_7d", "last_14d", "last_30d",
@@ -347,6 +348,29 @@ AMOUNT_MAX_PROP = {
     "minimum": 0,
 }
 
+# Exposed on BOTH profiles: the REST API already supports them.
+HIRING_DESCRIPTION_PROP = {
+    "type": "string",
+    "description": (
+        "Full-text search over the job description body (Postgres websearch syntax: "
+        "quoted phrases, OR, -exclusions). Use for claims written in the advert, "
+        "e.g. \"Series A\" OR \"just raised\". `search` covers company name, "
+        "industry, job title, location and city, but never the description body."
+    ),
+}
+FUNDING_DATE_BASIS_PROP = {
+    "type": "string",
+    "enum": ["announced", "occurred_at"],
+    "description": (
+        "Which date the window (dateFrom/dateTo/date_preset) applies to. Omitted "
+        "keeps the stored event date (occurred_at), which is when we recorded the "
+        "round, not when it was announced. Pass 'announced' for questions about "
+        "when a round was announced -- it uses the announcement date and falls "
+        "back to occurred_at when none is stored. Announced moves rows in BOTH "
+        "directions relative to the default, so it is opt-in."
+    ),
+}
+
 # ──────────────────────────────────────────────────────────────
 # Tool definitions
 # ──────────────────────────────────────────────────────────────
@@ -392,6 +416,7 @@ TOOLS = [
                 "dateFrom": DATE_FROM_PROP,
                 "dateTo": DATE_TO_PROP,
                 "date_preset": DATE_PRESET_PROP,
+                "date_basis": FUNDING_DATE_BASIS_PROP,
                 "sort_by": {
                     "type": "string",
                     "description": "Sort field (default occurred_at)",
@@ -553,6 +578,7 @@ TOOLS = [
                     "type": "string",
                     "description": "Free-text search across company name, industry, job title, location, and city",
                 },
+                "description": HIRING_DESCRIPTION_PROP,
                 "countries": {
                     "type": "string",
                     "description": (
@@ -593,6 +619,9 @@ TOOLS = [
                 "company_domain": COMPANY_DOMAIN_LIST_PROP,
                 "company_linkedin_url": COMPANY_LINKEDIN_LIST_PROP,
                 "categories": CATEGORIES_PIPE_PROP,
+                "exclude_company_domain": {"type": "string", "description": "Comma-separated employer domains to exclude by exact canonical domain. Applies to both count=true and result pages."},
+                "exclude_company_ids": {"type": "string", "description": "Comma-separated exact company record IDs to exclude. Applies to both counts and pages."},
+                "operator_sector": {"type": "string", "enum": ["fitness_wellness_operators"], "description": "Opt-in physical fitness/wellness operator profile mode. Maps to REST business_model; distinct from legacy categories and the Worker sector preset. Counts use the same indexed profile predicate as pages; unknown and contradictory profiles are excluded, not certified as non-operators."},
                 "subcategories": SUBCATEGORIES_PROP,
                 "positions": POSITIONS_PROP,
                 "departments": DEPARTMENTS_PROP,
@@ -829,6 +858,8 @@ marketing…) match by department so free-text hiring posts are found; exact tit
 - `team_size` (hiring) = whole-company size ranges `1-10,11-50,51-200,201-1000,1000-plus`
 - `employee_count_min/max` (funding, acquisitions, companies) = exact headcount bounds
 - `date_preset` overrides `dateFrom`/`dateTo`; absolute dates are YYYY-MM-DD
+- `date_basis` (funding) = which date the window filters. Omitted keeps the stored event date; pass `announced` when the question is about announcement dates (it both adds and drops rows, so it is opt-in)
+- `description` (hiring) = full-text search over the job advert body, Postgres websearch syntax (`"Series A" OR "just raised"`, `-intern`); `search` covers name/industry/title/location/city but never the body
 - Amounts are whole USD integers (5000000 = $5M)
 
 ## Presenting hiring results
@@ -1098,6 +1129,7 @@ TOOL_ENDPOINTS = {
     "search_hiring_signals": "/signals/hiring",
     "search_investors": "/signals/investors",
     "search_companies": "/companies",
+    "search_people": "/people",
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -1192,7 +1224,6 @@ def _expose_api_filters(tools):
             "investor_name": {"type": "string", "description": "Substring match on names of investors in the round."},
             "investors": {"type": "string", "description": "Comma-separated exact investor names (OR), via the investor-to-round links."},
             "investor_type": {"type": "string", "enum": ["pe", "vc"], "description": "A PE / VC investor took part in the round (participation, not ownership)."},
-            "date_basis": {"type": "string", "enum": ["announced", "occurred_at"], "description": "Date the window applies to; 'announced' uses the announcement date when recorded."},
         },
         "search_hiring_signals": {
             "include_total": {"type": "boolean", "description": "False skips full-cohort totals on data pages; pagination.totalCount is null and hasNextPage is determined with one lookahead row. Classic default keeps exact totals."},
@@ -1417,9 +1448,12 @@ def _prepare_tool_args(tool_args, tool_name: str = "", profile: str = "classic")
     """
     args = dict(tool_args or {})
     hr = profile == "hr"
-    if hr:
+    people = tool_name == "search_people"
+    if hr and not people:
         args.setdefault("filter_version", 2)
         if tool_name == "search_funding_signals":
+            # HR-only default, unchanged since 2.0: classic callers keep the
+            # stored-event-date window their saved queries were built against.
             args.setdefault("date_basis", "announced")
         # Historical HR analysis remains available without a second flag.
         preset = args.get("date_preset")
@@ -1428,8 +1462,13 @@ def _prepare_tool_args(tool_args, tool_name: str = "", profile: str = "classic")
             args.setdefault("include_expired", False)
     verbose = _is_truthy(args.pop("verbose", not hr))
     group_by_company = _is_truthy(args.pop("group_by_company", hr and tool_name == "search_hiring_signals"))
-    by_country = _is_truthy(args.pop("by_country", hr))
+    by_country = _is_truthy(args.pop("by_country", hr and not people))
     sector = args.pop("sector", None)
+    operator_sector = args.pop("operator_sector", None)
+    if operator_sector is not None:
+        if tool_name != "search_hiring_signals":
+            raise WorkflowError("operator_sector is supported only on search_hiring_signals")
+        args["business_model"] = operator_sector
     if sector and tool_name in ("search_hiring_signals", "search_job_change_signals"):
         # Raises WorkflowError for an unknown preset (returned as a tool error).
         sector_labels = _wf_sector_categories(sector)
@@ -1539,6 +1578,7 @@ def _group_hiring_by_company(rows):
             continue
         c = companies.setdefault(key, {
             "company": r.get("companyName"),
+            "category_match_basis": r.get("category_match_basis"),
             "hq": r.get("companyCountry"),
             "headcount": r.get("companyEmployeeCount"),
             "website": r.get("companyWebsite"),
@@ -1594,7 +1634,7 @@ def _json_response(data: dict, status: int = 200) -> Response:
     # Serialize in Python before crossing the JS bridge. Large Python integers
     # in schemas or funding records can become JS BigInt, which JSON.stringify
     # cannot serialize even though the values are valid JSON numbers.
-    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    body = json.dumps(sanitize(data), ensure_ascii=False, separators=(",", ":"))
     headers = Headers.new(to_js(
         {**CORS_HEADERS, "Content-Type": "application/json"},
         dict_converter=Object.fromEntries,
@@ -1608,7 +1648,7 @@ def _json_response(data: dict, status: int = 200) -> Response:
 def _error_result(message: str) -> dict:
     """Return an MCP tool error result."""
     return {
-        "content": [{"type": "text", "text": message}],
+        "content": [{"type": "text", "text": redact_text(message)}],
         "isError": True,
     }
 
@@ -1617,6 +1657,7 @@ def _success_result(data, verbose: bool = True, group_by_company: bool = False) 
     """Return an MCP tool success result with JSON-serialized data.
     Default: full payload, indented. Explicit verbose=false: trimmed, compact JSON."""
     import json
+    data = sanitize(data)
     if verbose:
         if group_by_company:
             data = _with_company_groups(data)
@@ -1679,17 +1720,35 @@ async def _call_api(endpoint: str, params: dict, api_key: str) -> dict:
 
 async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_adapter=False):
     from recruiting_contract import CONTRACT, REQUEST_CONTRACT
-    contract = REQUEST_CONTRACT if request_adapter else CONTRACT
+    # Preview exists only at the structured app route, including when the
+    # request-profile connector advertises it. It uses that route's hash.
+    structured_preview = tool == "preview_recruiting_search"
+    contract = REQUEST_CONTRACT if request_adapter and not structured_preview else CONTRACT
     base = _api_base_override or API_BASE
     if not base.endswith("/api/v2"):
         raise ValueError("API_BASE must end in /api/v2 to resolve recruiting v3")
-    url = base[:-len("/api/v2")] + "/api/v3/recruiting/" + ("request/" if request_adapter else "") + tool.replace("_", "-")
+    url = base[:-len("/api/v2")] + "/api/v3/recruiting/" + ("request/" if request_adapter and not structured_preview else "") + tool.replace("_", "-")
     response = await fetch(url, to_js({"method": "POST", "headers": {
         "Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
         "Idempotency-Key": operation_id, "X-Recruiting-Contract": contract.get("contract_hash", "unversioned")}, "body": json.dumps(arguments)}, dict_converter=Object.fromEntries))
     body = await response.text()
     if len(body) > 4_000_000:
         raise ValueError("Recruiting response exceeded the bounded response size")
+    return json.loads(body)
+
+
+async def _call_monitoring_v3(tool, arguments, api_key, operation_id):
+    from monitoring_contract import CONTRACT
+    base = _api_base_override or API_BASE
+    if not base.endswith("/api/v2"):
+        raise ValueError("API_BASE must end in /api/v2 to resolve monitoring v3")
+    url = base[:-len("/api/v2")] + "/api/v3/monitoring/" + tool.replace("_", "-")
+    response = await fetch(url, to_js({"method": "POST", "headers": {
+        "Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+        "Idempotency-Key": operation_id, "X-Monitoring-Contract": CONTRACT.get("contract_hash", "unversioned")}, "body": json.dumps(arguments)}, dict_converter=Object.fromEntries))
+    body = await response.text()
+    if len(body) > 4_000_000:
+        raise ValueError("Monitoring response exceeded the bounded response size")
     return json.loads(body)
 
 
@@ -3452,6 +3511,90 @@ def _wf_tool(name, description, properties, required=()):
             "annotations": {"readOnlyHint": True, "openWorldHint": True}}
 
 
+# People at a company, or an ICP sweep across people. Wraps GET /api/v2/people,
+# which the connectors never exposed: the only people reachable through MCP were
+# those attached to a job-change signal, so "who works at teero.com" came back
+# empty even though the company's People panel lists ten.
+SEARCH_PEOPLE_TOOL = {
+    "name": "search_people",
+    "description": (
+        "Find indexed people at a company, or browse a signal-driven people cohort. "
+        "Pass company_domain or company_linkedin_url for a company lookup; pass "
+        "title/seniority/function with geography to browse an ICP. A company lookup with no "
+        "signal-driven results can fall back to current employee rows with matched_signal:null. "
+        "Function, seniority, person-location and signal-type filters disable this fallback. "
+        "This is not a complete staff census, a reporting-line graph or proof of a hiring manager. "
+        "Use this rather than search_companies, which returns companies and no people, and "
+        "rather than search_job_change_signals, which only reaches people attached to a job "
+        "change. Costs 1 credit per executed search; count=true is free."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "page": PAGE_PROP,
+            "limit": _limit_prop(100),
+            "company_domain": {
+                "type": "string",
+                "description": "Company website domain(s), comma-separated, for an indexed people lookup (e.g. 'teero.com'). Scheme, www. and trailing slash are normalized away. An eligible company lookup can use current employee fallback when no signal-driven rows match.",
+            },
+            "company_linkedin_url": {
+                "type": "string",
+                "description": "Company LinkedIn URL (e.g. 'linkedin.com/company/novartis').",
+            },
+            "linkedin_url": {
+                "type": "string",
+                "description": "A person's LinkedIn profile URL (e.g. 'linkedin.com/in/jane-doe').",
+            },
+            "email": {
+                "type": "string",
+                "description": "Person email. Resolves current employees only; job-change records carry no email.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Title or comma-separated list (e.g. 'CTO,VP of Engineering'). Word-boundary matching: 'COO' does not match 'Coordinator'.",
+            },
+            "function": {
+                "type": "string",
+                "description": "Comma-separated function ids: marketing | sales | engineering | product | design | operations | finance | people | data | customer_success | growth | legal",
+            },
+            "seniority": {
+                "type": "string",
+                "description": "Comma-separated seniority ids: founder | c_level | vp | director | head | lead | manager",
+            },
+            "country": COUNTRIES_PROP,
+            "exclude_countries": EXCLUDE_COUNTRIES_PROP,
+            "city": {
+                "type": "string",
+                "description": "Free-text city match. Only job-change people carry city data, so employee-sourced rows are excluded when this is set.",
+            },
+            "company_size": {
+                "type": "string",
+                "description": "Comma-separated size bands: 1-10 | 11-50 | 51-100 | 101-250 | 251-500 | 501-1000 | 1000-plus",
+            },
+            "industry": {
+                "type": "string",
+                "description": "Industry or comma-separated list (case-insensitive exact match).",
+            },
+            "signal_type": {
+                "type": "string",
+                "description": "Optional signal type(s): funding_round | acquisition | job_change. Pins matched_signal to those types.",
+            },
+            "signal_date_range": {
+                "type": "string",
+                "description": "Lookback for the latest signal, <n><d|w|m|y> (e.g. 30d, 6m, 2y). Defaults to 12m when browsing an ICP, all-time when an identifier lookup is set.",
+            },
+            "count": COUNT_PROP,
+            "verbose": VERBOSE_PROP,
+        },
+        "additionalProperties": False,
+    },
+    "annotations": {
+        "title": "Search People",
+        "readOnlyHint": True,
+        "openWorldHint": True,
+    },
+}
+
 HR_WORKFLOW_TOOLS = [
     _wf_tool("find_recent_appointments", "Find PEOPLE newly appointed to a role, not employers advertising vacancies. Use for 'freshly appointed CFOs in FMCG'. Returns named people, employer, role, announcement/start dates and source evidence. Do not use for 'companies hiring a new CFO', which asks for vacancies.", {
         **{k: WF_HIRING_PROPS[k] for k in ("role", "sector", "as_of", "max_api_calls", "page", "page_size", "verbose")},
@@ -4101,10 +4244,89 @@ def _lean_response(payload, request, args):
     return result
 
 
+# Search profiles that ALSO serve the monitoring tools, so a customer who
+# already has one of these connectors gains monitoring without adding a second
+# one. Purely additive: every existing tool keeps its name, schema, handler and
+# description, and each profile keeps its own instructions and serverInfo.
+# /v3/monitoring stays as it is for anyone who wants monitoring on its own.
+MONITORING_HOST_PROFILES = {"hr", "recruiting_v3", "monitoring_v3", "v3"}
+
+# The two v3 URLs serve ONE tool set: recruiting search, search_people and
+# monitoring. /v3/monitoring started as monitoring-only and /v3/recruiting had no
+# search_people, so which v3 URL a customer was given decided which tools they
+# got. Each keeps its own serverInfo name only because the app's keyed proxy
+# proves discovery by that name (V3_MONITORING_SERVER / signalbase-recruiting-v3).
+V3_UNIFIED_PROFILES = {"v3", "recruiting_v3", "monitoring_v3"}
+# /v3 is THE v3 URL. /v3/recruiting and /v3/monitoring predate it and are kept
+# as silent aliases so connectors already pointed at them keep working; they are
+# no longer documented. Server name per path, because the app's keyed proxy
+# proves discovery by name for each route.
+V3_SERVER_NAMES = {
+    "v3": "signalbase-v3",
+    "monitoring_v3": "signalbase-monitoring-v3",
+}
+MONITORING_RESOURCE_URI = "signalbase://monitoring/v3/guide"
+
+# Appended to a host profile's own instructions — never replacing them — so the
+# monitoring tools carry the guidance that is not already in their descriptions.
+# Deliberately NOT included: the "monitor, don't search" boundary from the
+# standalone profile. On a combined connector both tool sets are meant to be
+# used freely, so that line would work against the point of merging them.
+# {people} names the people-search tools that live on the same connector.
+MONITORING_ADDENDUM = (
+    " Monitoring tools on this connector change a customer's account: confirm the monitor and the"
+    " list with the user before the first write of a conversation. Adding a company is"
+    " forward-looking — it does not replay signals the company already has; use the search tools"
+    " here for history. When you add targets, report what each one resolved to, naming the matched"
+    " company, and say which are still pending. A pending target is matched by automatic research"
+    " within minutes to hours and re-checked nightly; never tell a user it has failed or ask them"
+    " to re-add it. A monitor delivers company-level signals; for people — decision-makers, new"
+    " appointments, job changes — use {people} on this same connector."
+)
+
+_V3_PEOPLE_TOOLS = (
+    "search_people for who works at a company, and search_appointments for recent appointments"
+)
+MONITORING_PEOPLE_TOOLS = {
+    "hr": "find_recent_appointments and search_job_change_signals",
+    "recruiting_v3": _V3_PEOPLE_TOOLS,
+    "monitoring_v3": _V3_PEOPLE_TOOLS,
+    "v3": _V3_PEOPLE_TOOLS,
+}
+
+
+def _monitoring_addendum(profile):
+    return MONITORING_ADDENDUM.format(people=MONITORING_PEOPLE_TOOLS[profile])
+
+
+def _monitoring_tools():
+    from monitoring_v3 import tools as monitoring_tools
+    return monitoring_tools()
+
+
+def _monitoring_tool_names():
+    return {tool["name"] for tool in _monitoring_tools()}
+
+
+# V3 sourcing guidance is additive; legacy discovery remains byte-stable.
+V3_SEARCH_PEOPLE_DESCRIPTION = "Find indexed people at a company, or browse a signal-driven people cohort. Pass company_domain or company_linkedin_url for a company lookup; pass title/seniority/function with geography to browse an ICP. Eligible company lookups supplement indexed results with matching current employees for every requested company; roster-only rows have matched_signal:null. Eligible company-lookup results are deduplicated before pagination; other indexed paths retain signal-row counting. Function, seniority, person-location, signal-type and individual LinkedIn/email filters disable this fallback. This is not a complete staff census, a reporting-line graph or proof of a hiring manager. Use this rather than search_companies, which returns companies and no people, and rather than search_job_change_signals, which only reaches people attached to a job change. For missing or additional contacts, use the client's own browser/search tools when available to gather people from company team pages and public professional profiles. Keep web-discovered contacts and source links distinct from indexed records; a title does not prove buying authority. This guidance adds no backend search-provider call. Costs 1 credit per executed search; count=true is free."
+
+
+def _v3_people_tool():
+    tool = deepcopy(SEARCH_PEOPLE_TOOL)
+    tool["description"] = V3_SEARCH_PEOPLE_DESCRIPTION
+    return tool
+
+
 def _tools_for_profile(profile):
-    if profile in {"recruiting_v3", "recruiting_v3_request"}:
+    if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import tools as v3_tools
-        return v3_tools(profile == "recruiting_v3_request")
+        tools = v3_tools(profile == "recruiting_v3_request")
+        if profile in V3_UNIFIED_PROFILES:
+            tools = [*tools, _v3_people_tool(), *_monitoring_tools()]
+        elif profile == "recruiting_v3_request":
+            tools = [*tools, _v3_people_tool()]
+        return tools
     if profile == "hr_recruiting":
         return _recruiting_tools()
     if profile == "hr_brief":
@@ -4123,10 +4345,10 @@ def _tools_for_profile(profile):
         if tool["name"] == "search_hiring_signals":
             props["group_by_company"]["default"] = True
             props["include_expired"]["description"] = "Open postings by default. True includes history; explicit end dates/calendar presets also include history unless false is explicitly supplied."
-            props["description"] = _wf_prop("string", "Full-text job-description search.")
+            props["description"] = dict(HIRING_DESCRIPTION_PROP)
             props["exclude_company_countries"] = COUNTRIES_PROP
         if tool["name"] == "search_funding_signals":
-            props["date_basis"] = _wf_prop("string", "HR defaults to announced date (occurredAt only when no announced date exists). Stored dates are never modified.", enum=["announced", "occurred_at"], default="announced")
+            props["date_basis"] = {**FUNDING_DATE_BASIS_PROP, "default": "announced", "description": "HR defaults to announced date (occurredAt only when no announced date exists). Stored dates are never modified."}
             props["investor_name"] = _wf_prop("string", "Substring match on actual funding-round investor names.")
             props["investors"] = _wf_prop("string", "Comma-separated exact investor names, OR. Uses existing investor-to-round relationships.")
             props["investor_type"] = _wf_prop("string", "Observed round participation by PE or VC investors, not current ownership.", enum=["pe", "vc"])
@@ -4134,7 +4356,7 @@ def _tools_for_profile(profile):
             props["categories"] = CATEGORIES_PIPE_PROP
             props["subcategories"] = SUBCATEGORIES_PROP
     # The workflow tools are exclusive to HR v2; classic clients keep their six tools.
-    return deepcopy(HR_WORKFLOW_TOOLS) + tools
+    return deepcopy(HR_WORKFLOW_TOOLS) + [deepcopy(SEARCH_PEOPLE_TOOL)] + tools + _monitoring_tools()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -4157,11 +4379,49 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
     else:
         params = raw_params
 
-    if profile in {"recruiting_v3", "recruiting_v3_request"}:
+    if (
+        profile in MONITORING_HOST_PROFILES
+        and method == "tools/call"
+        and params.get("name") in _monitoring_tool_names()
+    ) or (
+        profile in V3_UNIFIED_PROFILES
+        and method == "resources/read"
+        and params.get("uri") == MONITORING_RESOURCE_URI
+    ):
+        # Monitoring calls, and its guide resource, go to the monitoring handler
+        # wherever they are offered. Everything else stays with the profile's
+        # own handler, so serverInfo and instructions come from there.
+        from monitoring_v3 import handle as handle_monitoring
+        return await handle_monitoring(request_body, api_key, _call_monitoring_v3)
+    if profile in (*V3_UNIFIED_PROFILES, "recruiting_v3_request") and method == "tools/call" and params.get("name") == "search_people":
+        # One implementation of search_people: the /v2 path, which already
+        # knows not to inject the HR signal-search defaults into /people.
+        return await _handle_jsonrpc(request_body, api_key, "hr")
+    if profile in (*V3_UNIFIED_PROFILES, "recruiting_v3_request") and method == "tools/list":
+        # recruiting_v3 answers tools/list inside its own handler, so the union
+        # has to be applied here.
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": _tools_for_profile(profile)}}
+    if profile in V3_UNIFIED_PROFILES and method == "resources/list":
+        recruiting_guide = {"uri": "signalbase://recruiting/v3/guide", "name": "Recruiting search concepts and examples", "mimeType": "application/json"}
+        monitoring_guide = {"uri": MONITORING_RESOURCE_URI, "name": "Monitoring concepts and examples", "mimeType": "application/json"}
+        # Each profile lists its own guide first, as it did before the merge,
+        # so a client that reads the first resource gets what it always got.
+        guides = [monitoring_guide, recruiting_guide] if profile == "monitoring_v3" else [recruiting_guide, monitoring_guide]
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": guides}}
+    if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import handle as handle_v3
         request_adapter = profile == "recruiting_v3_request"
         callback = (lambda tool, args, key, op: _call_recruiting_v3(tool, args, key, op, True)) if request_adapter else _call_recruiting_v3
-        return await handle_v3(request_body, api_key, callback, request_adapter)
+        v3_response = await handle_v3(request_body, api_key, callback, request_adapter)
+        if profile in V3_UNIFIED_PROFILES and method == "initialize":
+            result = v3_response.get("result") or {}
+            if result.get("instructions"):
+                result["instructions"] = result["instructions"] + _monitoring_addendum(profile)
+            if profile in V3_SERVER_NAMES:
+                # Same tools and instructions on every v3 path; only the name
+                # differs, because the app proves discovery by it per route.
+                result["serverInfo"] = {"name": V3_SERVER_NAMES[profile], "version": "1.1.0"}
+        return v3_response
     if profile in {"hr_brief", "hr_recruiting"}:
         if method == "initialize":
             recruiting = profile == "hr_recruiting"
@@ -4214,7 +4474,7 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
                 "name": "signalbase-hr-mcp" if profile == "hr" else SERVER_NAME,
                 "version": "2.0.0" if profile == "hr" else SERVER_VERSION,
             },
-            "instructions": HR_INSTRUCTIONS if profile == "hr" else INSTRUCTIONS,
+            "instructions": (HR_INSTRUCTIONS + _monitoring_addendum("hr")) if profile == "hr" else INSTRUCTIONS,
         }
 
     elif method == "notifications/initialized":
@@ -4404,10 +4664,10 @@ async def on_fetch(request, env):
             405,
         )
 
-    auth_header = request.headers.get("Authorization") or ""
-    api_key = ""
-    if auth_header.startswith("Bearer "):
-        api_key = auth_header[7:].strip()
+    try:
+        api_key, path = request_credentials(request.headers.get("Authorization"), urlsplit(str(request.url)).path)
+    except CredentialError as error:
+        return _json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": str(error)}}, error.status)
 
     try:
         import json as json_mod
@@ -4419,8 +4679,7 @@ async def on_fetch(request, env):
             400,
         )
 
-    path = urlsplit(str(request.url)).path.rstrip("/")
-    profile = "recruiting_v3_request" if path == "/v3/recruiting/request" else "recruiting_v3" if path == "/v3/recruiting" else "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
+    profile = "v3" if path == "/v3" else "monitoring_v3" if path == "/v3/monitoring" else "recruiting_v3_request" if path == "/v3/recruiting/request" else "recruiting_v3" if path == "/v3/recruiting" else "hr_recruiting" if path == "/v2/recruiting" else "hr_brief" if path == "/v2/brief" else "hr" if path == "/v2" else "classic"
     response, status = await _handle_body(body, api_key, profile)
     if status != 200:
         return _json_response(response, status)

@@ -1,0 +1,1162 @@
+{
+  "source": {
+    "allow_list": "docs/mcp-api-contract.json",
+    "parser": "src/server/api/v2/api-helpers/filters.ts#parseHiringFilters",
+    "router_schema": "src/server/api/v2/routers/signals/schemas.ts#hiringFiltersSchema"
+  },
+  "route": "/api/v2/signals/hiring",
+  "parameter_mapping": [
+    {
+      "rest_query_parameter": "applicants",
+      "parser_fields": [
+        "hiringApplicants"
+      ],
+      "router_fields": [
+        "hiringApplicants"
+      ],
+      "parsed_schema": [
+        {
+          "field": "hiringApplicants",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      ],
+      "mcp_argument": "applicants",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "business_model",
+      "parser_fields": [
+        "businessModel"
+      ],
+      "router_fields": [
+        "businessModel"
+      ],
+      "parsed_schema": [
+        {
+          "field": "businessModel",
+          "schema": {
+            "type": "string",
+            "const": "fitness_wellness_operators"
+          }
+        }
+      ],
+      "mcp_argument": "operator_sector",
+      "example_query_fragment": "business_model=fitness_wellness_operators"
+    },
+    {
+      "rest_query_parameter": "categories",
+      "parser_fields": [
+        "selectedCategories"
+      ],
+      "router_fields": [
+        "selectedCategories"
+      ],
+      "parsed_schema": [
+        {
+          "field": "selectedCategories",
+          "schema": {
+            "type": "string",
+            "default": ""
+          }
+        }
+      ],
+      "mcp_argument": "categories",
+      "example_query_fragment": "categories=Wellness%20and%20Fitness%20Services"
+    },
+    {
+      "rest_query_parameter": "city",
+      "parser_fields": [
+        "city"
+      ],
+      "router_fields": [
+        "city"
+      ],
+      "parsed_schema": [
+        {
+          "field": "city",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "city",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "company_countries",
+      "parser_fields": [
+        "companyCountries"
+      ],
+      "router_fields": [
+        "companyCountries"
+      ],
+      "parsed_schema": [
+        {
+          "field": "companyCountries",
+          "schema": {
+            "type": "string",
+            "default": ""
+          }
+        }
+      ],
+      "mcp_argument": "company_countries",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "company_domain",
+      "parser_fields": [
+        "companyDomain"
+      ],
+      "router_fields": [
+        "companyDomain"
+      ],
+      "parsed_schema": [
+        {
+          "field": "companyDomain",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "company_domain",
+      "example_query_fragment": "company_domain=example.com,other.example"
+    },
+    {
+      "rest_query_parameter": "company_linkedin_url",
+      "parser_fields": [
+        "companyLinkedinUrl"
+      ],
+      "router_fields": [
+        "companyLinkedinUrl"
+      ],
+      "parsed_schema": [
+        {
+          "field": "companyLinkedinUrl",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "company_linkedin_url",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "company_name",
+      "parser_fields": [
+        "companyName"
+      ],
+      "router_fields": [
+        "companyName"
+      ],
+      "parsed_schema": [
+        {
+          "field": "companyName",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "company_name",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "count",
+      "parser_fields": [
+        "countOnly"
+      ],
+      "router_fields": [
+        "countOnly"
+      ],
+      "parsed_schema": [
+        {
+          "field": "countOnly",
+          "schema": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      ],
+      "mcp_argument": "count",
+      "example_query_fragment": "count=true"
+    },
+    {
+      "rest_query_parameter": "count_companies",
+      "parser_fields": [
+        "countCompanies"
+      ],
+      "router_fields": [
+        "countCompanies"
+      ],
+      "parsed_schema": [
+        {
+          "field": "countCompanies",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "mcp_argument": "count_companies",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "countries",
+      "parser_fields": [
+        "selectedCountries"
+      ],
+      "router_fields": [
+        "selectedCountries"
+      ],
+      "parsed_schema": [
+        {
+          "field": "selectedCountries",
+          "schema": {
+            "type": "string",
+            "default": ""
+          }
+        }
+      ],
+      "mcp_argument": "countries",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "dateFrom",
+      "parser_fields": [
+        "dateFrom"
+      ],
+      "router_fields": [
+        "dateFrom"
+      ],
+      "parsed_schema": [
+        {
+          "field": "dateFrom",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "dateFrom",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "dateTo",
+      "parser_fields": [
+        "dateTo"
+      ],
+      "router_fields": [
+        "dateTo"
+      ],
+      "parsed_schema": [
+        {
+          "field": "dateTo",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "dateTo",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "date_preset",
+      "parser_fields": [
+        "datePreset"
+      ],
+      "router_fields": [
+        "datePreset"
+      ],
+      "parsed_schema": [
+        {
+          "field": "datePreset",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "today",
+              "yesterday",
+              "last_7d",
+              "last_14d",
+              "last_30d",
+              "last_60d",
+              "last_90d",
+              "last_6m",
+              "last_1y",
+              "last_2y",
+              "this_week",
+              "this_month",
+              "this_quarter",
+              "this_year",
+              "last_week",
+              "last_month",
+              "last_quarter",
+              "last_year"
+            ]
+          }
+        }
+      ],
+      "mcp_argument": "date_preset",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "departments",
+      "parser_fields": [
+        "departments"
+      ],
+      "router_fields": [
+        "departments"
+      ],
+      "parsed_schema": [
+        {
+          "field": "departments",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      ],
+      "mcp_argument": "departments",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "description",
+      "parser_fields": [
+        "description"
+      ],
+      "router_fields": [
+        "description"
+      ],
+      "parsed_schema": [
+        {
+          "field": "description",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "description",
+      "example_query_fragment": "description=%22gym%20owners%22%20OR%20%22fitness%22"
+    },
+    {
+      "rest_query_parameter": "exclude_company_countries",
+      "parser_fields": [
+        "excludeCompanyCountries"
+      ],
+      "router_fields": [
+        "excludeCompanyCountries"
+      ],
+      "parsed_schema": [
+        {
+          "field": "excludeCompanyCountries",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "exclude_company_countries",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "exclude_company_domain",
+      "parser_fields": [
+        "excludeCompanyDomain"
+      ],
+      "router_fields": [
+        "excludeCompanyDomain"
+      ],
+      "parsed_schema": [
+        {
+          "field": "excludeCompanyDomain",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "exclude_company_domain",
+      "example_query_fragment": "exclude_company_domain=irrelevant.example"
+    },
+    {
+      "rest_query_parameter": "exclude_company_ids",
+      "parser_fields": [
+        "excludeCompanyIds"
+      ],
+      "router_fields": [
+        "excludeCompanyIds"
+      ],
+      "parsed_schema": [
+        {
+          "field": "excludeCompanyIds",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 50
+          }
+        }
+      ],
+      "mcp_argument": "exclude_company_ids",
+      "example_query_fragment": "exclude_company_ids=id-1,id-2"
+    },
+    {
+      "rest_query_parameter": "exclude_countries",
+      "parser_fields": [
+        "excludeCountries"
+      ],
+      "router_fields": [
+        "excludeCountries"
+      ],
+      "parsed_schema": [
+        {
+          "field": "excludeCountries",
+          "schema": {
+            "type": "string",
+            "default": ""
+          }
+        }
+      ],
+      "mcp_argument": "exclude_countries",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "exclude_staffing_agencies",
+      "parser_fields": [
+        "excludeStaffingAgencies"
+      ],
+      "router_fields": [
+        "excludeStaffingAgencies"
+      ],
+      "parsed_schema": [
+        {
+          "field": "excludeStaffingAgencies",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "mcp_argument": "exclude_staffing_agencies",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "filter_version",
+      "parser_fields": [
+        "filterVersion"
+      ],
+      "router_fields": [
+        "filterVersion"
+      ],
+      "parsed_schema": [
+        {
+          "field": "filterVersion",
+          "schema": {
+            "type": "number",
+            "enum": [
+              1,
+              2
+            ]
+          }
+        }
+      ],
+      "mcp_argument": "filter_version",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "founded_year_max",
+      "parser_fields": [
+        "companyFoundedYearMax"
+      ],
+      "router_fields": [
+        "companyFoundedYearMax"
+      ],
+      "parsed_schema": [
+        {
+          "field": "companyFoundedYearMax",
+          "schema": {
+            "type": "integer",
+            "minimum": 1700,
+            "maximum": 2100
+          }
+        }
+      ],
+      "mcp_argument": "founded_year_max",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "founded_year_min",
+      "parser_fields": [
+        "companyFoundedYearMin"
+      ],
+      "router_fields": [
+        "companyFoundedYearMin"
+      ],
+      "parsed_schema": [
+        {
+          "field": "companyFoundedYearMin",
+          "schema": {
+            "type": "integer",
+            "minimum": 1700,
+            "maximum": 2100
+          }
+        }
+      ],
+      "mcp_argument": "founded_year_min",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "funding_date_from",
+      "parser_fields": [
+        "fundingDateFrom"
+      ],
+      "router_fields": [
+        "fundingDateFrom"
+      ],
+      "parsed_schema": [
+        {
+          "field": "fundingDateFrom",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "funding_date_from",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "funding_date_to",
+      "parser_fields": [
+        "fundingDateTo"
+      ],
+      "router_fields": [
+        "fundingDateTo"
+      ],
+      "parsed_schema": [
+        {
+          "field": "fundingDateTo",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "funding_date_to",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "funding_investor_type",
+      "parser_fields": [
+        "fundingInvestorType"
+      ],
+      "router_fields": [
+        "fundingInvestorType"
+      ],
+      "parsed_schema": [
+        {
+          "field": "fundingInvestorType",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "pe",
+              "vc"
+            ]
+          }
+        }
+      ],
+      "mcp_argument": "funding_investor_type",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "funding_investors",
+      "parser_fields": [
+        "fundingInvestors"
+      ],
+      "router_fields": [
+        "fundingInvestors"
+      ],
+      "parsed_schema": [
+        {
+          "field": "fundingInvestors",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 50
+          }
+        }
+      ],
+      "mcp_argument": "funding_investors",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "funding_rounds",
+      "parser_fields": [
+        "fundingRounds"
+      ],
+      "router_fields": [
+        "fundingRounds"
+      ],
+      "parsed_schema": [
+        {
+          "field": "fundingRounds",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 20
+          }
+        }
+      ],
+      "mcp_argument": "funding_rounds",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "headcount_growth_min",
+      "parser_fields": [
+        "headcountGrowthMin"
+      ],
+      "router_fields": [
+        "headcountGrowthMin"
+      ],
+      "parsed_schema": [
+        {
+          "field": "headcountGrowthMin",
+          "schema": {
+            "type": "number",
+            "minimum": -10000,
+            "maximum": 10000
+          }
+        }
+      ],
+      "mcp_argument": "headcount_growth_min",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "headcount_growth_window",
+      "parser_fields": [
+        "headcountGrowthWindow"
+      ],
+      "router_fields": [
+        "headcountGrowthWindow"
+      ],
+      "parsed_schema": [
+        {
+          "field": "headcountGrowthWindow",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "3m",
+              "6m",
+              "9m",
+              "12m"
+            ]
+          }
+        }
+      ],
+      "mcp_argument": "headcount_growth_window",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "include_expired",
+      "parser_fields": [
+        "includeExpired"
+      ],
+      "router_fields": [
+        "includeExpired"
+      ],
+      "parsed_schema": [
+        {
+          "field": "includeExpired",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "mcp_argument": "include_expired",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "include_total",
+      "parser_fields": [
+        "includeTotal"
+      ],
+      "router_fields": [
+        "includeTotal"
+      ],
+      "parsed_schema": [
+        {
+          "field": "includeTotal",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "mcp_argument": "include_total",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "job_countries",
+      "parser_fields": [
+        "jobCountries"
+      ],
+      "router_fields": [
+        "jobCountries"
+      ],
+      "parsed_schema": [
+        {
+          "field": "jobCountries",
+          "schema": {
+            "type": "string",
+            "default": ""
+          }
+        }
+      ],
+      "mcp_argument": "job_countries",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "job_locations",
+      "parser_fields": [
+        "jobLocations"
+      ],
+      "router_fields": [
+        "jobLocations"
+      ],
+      "parsed_schema": [
+        {
+          "field": "jobLocations",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "maxItems": 30
+          }
+        }
+      ],
+      "mcp_argument": "job_locations",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "limit",
+      "parser_fields": [
+        "limit"
+      ],
+      "router_fields": [
+        "limit"
+      ],
+      "parsed_schema": [
+        {
+          "field": "limit",
+          "schema": {
+            "type": "number",
+            "maximum": 1000,
+            "default": 20
+          }
+        }
+      ],
+      "mcp_argument": "limit",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "max_company_postings",
+      "parser_fields": [
+        "maxCompanyPostings"
+      ],
+      "router_fields": [
+        "maxCompanyPostings"
+      ],
+      "parsed_schema": [
+        {
+          "field": "maxCompanyPostings",
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      ],
+      "mcp_argument": "max_company_postings",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "min_distinct_titles",
+      "parser_fields": [
+        "minDistinctTitles"
+      ],
+      "router_fields": [
+        "minDistinctTitles"
+      ],
+      "parsed_schema": [
+        {
+          "field": "minDistinctTitles",
+          "schema": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 100
+          }
+        }
+      ],
+      "mcp_argument": "min_distinct_titles",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "open_as_of",
+      "parser_fields": [
+        "openAsOf"
+      ],
+      "router_fields": [
+        "openAsOf"
+      ],
+      "parsed_schema": [
+        {
+          "field": "openAsOf",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "mcp_argument": "open_as_of",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "page",
+      "parser_fields": [
+        "page"
+      ],
+      "router_fields": [
+        "page"
+      ],
+      "parsed_schema": [
+        {
+          "field": "page",
+          "schema": {
+            "type": "number",
+            "default": 1
+          }
+        }
+      ],
+      "mcp_argument": "page",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "positions",
+      "parser_fields": [
+        "positions"
+      ],
+      "router_fields": [
+        "positions"
+      ],
+      "parsed_schema": [
+        {
+          "field": "positions",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      ],
+      "mcp_argument": "positions",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "posted_min_days_ago",
+      "parser_fields": [
+        "postedMinDaysAgo"
+      ],
+      "router_fields": [
+        "postedMinDaysAgo"
+      ],
+      "parsed_schema": [
+        {
+          "field": "postedMinDaysAgo",
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3650
+          }
+        }
+      ],
+      "mcp_argument": "posted_min_days_ago",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "role_logic",
+      "parser_fields": [
+        "roleLogic"
+      ],
+      "router_fields": [
+        "roleLogic"
+      ],
+      "parsed_schema": [
+        {
+          "field": "roleLogic",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "and",
+              "or"
+            ],
+            "default": "and"
+          }
+        }
+      ],
+      "mcp_argument": "role_logic",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "role_scope",
+      "parser_fields": [
+        "roleScope"
+      ],
+      "router_fields": [
+        "roleScope"
+      ],
+      "parsed_schema": [
+        {
+          "field": "roleScope",
+          "schema": {
+            "type": "string",
+            "const": "software"
+          }
+        }
+      ],
+      "mcp_argument": "role_scope",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "search",
+      "parser_fields": [
+        "search"
+      ],
+      "router_fields": [
+        "search"
+      ],
+      "parsed_schema": [
+        {
+          "field": "search",
+          "schema": {
+            "type": "string",
+            "default": ""
+          }
+        }
+      ],
+      "mcp_argument": "search",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "seniorities",
+      "parser_fields": [
+        "seniorities"
+      ],
+      "router_fields": [
+        "seniorities"
+      ],
+      "parsed_schema": [
+        {
+          "field": "seniorities",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      ],
+      "mcp_argument": "seniorities",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "sort_by",
+      "parser_fields": [
+        "sortBy"
+      ],
+      "router_fields": [
+        "sortBy"
+      ],
+      "parsed_schema": [
+        {
+          "field": "sortBy",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "date_posted",
+              "created_at",
+              "title",
+              "company_name",
+              "location"
+            ]
+          }
+        }
+      ],
+      "mcp_argument": "sort_by",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "sort_order",
+      "parser_fields": [
+        "sortOrder"
+      ],
+      "router_fields": [
+        "sortOrder"
+      ],
+      "parsed_schema": [
+        {
+          "field": "sortOrder",
+          "schema": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        }
+      ],
+      "mcp_argument": "sort_order",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "states",
+      "parser_fields": [
+        "selectedStates"
+      ],
+      "router_fields": [
+        "selectedStates"
+      ],
+      "parsed_schema": [
+        {
+          "field": "selectedStates",
+          "schema": {
+            "type": "string",
+            "default": ""
+          }
+        }
+      ],
+      "mcp_argument": "states",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "subcategories",
+      "parser_fields": [
+        "selectedSubcategories"
+      ],
+      "router_fields": [
+        "selectedSubcategories"
+      ],
+      "parsed_schema": [
+        {
+          "field": "selectedSubcategories",
+          "schema": {
+            "type": "string",
+            "default": ""
+          }
+        }
+      ],
+      "mcp_argument": "subcategories",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "team_size",
+      "parser_fields": [
+        "teamSize"
+      ],
+      "router_fields": [
+        "teamSize"
+      ],
+      "parsed_schema": [
+        {
+          "field": "teamSize",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      ],
+      "mcp_argument": "team_size",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "work_mode",
+      "parser_fields": [
+        "workMode"
+      ],
+      "router_fields": [
+        "workMode"
+      ],
+      "parsed_schema": [
+        {
+          "field": "workMode",
+          "schema": {
+            "type": "string",
+            "const": "remote"
+          }
+        }
+      ],
+      "mcp_argument": "work_mode",
+      "example_query_fragment": null
+    },
+    {
+      "rest_query_parameter": "workflow_evidence",
+      "parser_fields": [
+        "workflowEvidence"
+      ],
+      "router_fields": [
+        "workflowEvidence"
+      ],
+      "parsed_schema": [
+        {
+          "field": "workflowEvidence",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "mcp_argument": "workflow_evidence",
+      "example_query_fragment": null
+    }
+  ],
+  "worker_only_shims": {
+    "verbose": "response trimming only; not a REST parameter",
+    "group_by_company": "additional Worker grouping only; not a REST parameter",
+    "by_country": "additional Worker count probes; not a REST parameter",
+    "sector": "Worker preset that maps to REST categories; not a REST parameter",
+    "operator_sector": "maps only to REST business_model; opt-in"
+  },
+  "profile_defaults": {
+    "classic": {
+      "filter_version": "omitted (legacy semantics)",
+      "include_expired": "omitted (historical default)",
+      "verbose": true,
+      "group_by_company": false
+    },
+    "hr": {
+      "filter_version": 2,
+      "include_expired": "false for nonhistorical hiring requests",
+      "verbose": false,
+      "group_by_company": true
+    }
+  },
+  "charge_rules": {
+    "count_true": "zero credits",
+    "executed_page": "one API credit",
+    "failed_execution": "no completed page charge"
+  }
+}

@@ -26,8 +26,11 @@ Search for hiring signals (open job postings). Returns live job listings with ti
 | `city` | string | Free-text city/location search | `"San Francisco"` |
 | `company_name` | string | Company name match | `"Stripe"` |
 | `company_domain` | string | Comma-separated domains, up to 50, strict canonical match — one credit for the list | `"stripe.com,vercel.com"` |
+| `exclude_company_domain` | string | Exact normalized employer domains to omit in counts and pages | `"irrelevant.example"` |
+| `exclude_company_ids` | string | Exact company record IDs to omit in counts and pages | `"id-1,id-2"` |
 | `company_linkedin_url` | string | Comma-separated LinkedIn company URLs, up to 50 | `"https://www.linkedin.com/company/stripe"` |
 | `categories` | string | Pipe-separated industry categories | `"Technology\|Software"` |
+| `operator_sector` | string | Opt-in physical operator classifier, mapped to REST `business_model`; currently `fitness_wellness_operators` | `"fitness_wellness_operators"` |
 | `subcategories` | string | Comma-separated Signalbase categories (multi-select) | `"ai,fintech,saas"` |
 | `positions` | string | Comma-separated positions | `"cto,head of engineering"` |
 | `departments` | string | Comma-separated departments | `"engineering,product"` |
@@ -42,6 +45,22 @@ Search for hiring signals (open job postings). Returns live job listings with ti
 | `sort_order` | string | Sort direction | `"desc"` |
 | `count` | boolean | Return only the total count (free) | `true` |
 | `verbose` | boolean | Worker-only: return the full untrimmed payload | `true` |
+
+`categories` is an exact filter on the indexed **company industry**. The
+returned `category_match_basis` names that value and keeps the posting's
+`industries` field separate. An employer can still be irrelevant to a narrower
+business model despite an industry label; use explicit company exclusions for
+known irrelevant records. The current index can contain stale or polluted
+company industries; this filter does not validate the business model.
+
+`operator_sector=fitness_wellness_operators` uses a separate indexed company
+profile predicate. Included subtypes are physical gyms/fitness studios,
+pilates/yoga studios, and physical wellness centers/spas. Software/SaaS for
+studios, prayer/meditation apps without physical operations, healthcare
+providers, and unknown or advert-polluted company profiles do not qualify.
+The same predicate powers `count=true` and pages. `business_model_assessment`
+on each returned row names the indexed basis and its source limits. This mode
+does not alter existing `categories` or the Worker `sector` preset.
 
 ### Sort By Options
 `date_posted`, `created_at`, `title`, `company_name`, `location`
