@@ -286,6 +286,9 @@
               "last_6m",
               "last_1y",
               "last_2y",
+              "last_3y",
+              "last_5y",
+              "all_time",
               "this_week",
               "this_month",
               "this_quarter",
@@ -760,7 +763,8 @@
         {
           "field": "limit",
           "schema": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 1,
             "maximum": 1000,
             "default": 20
           }
@@ -842,7 +846,8 @@
         {
           "field": "page",
           "schema": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 1,
             "default": 1
           }
         }
