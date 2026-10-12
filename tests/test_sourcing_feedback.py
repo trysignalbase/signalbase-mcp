@@ -7,6 +7,7 @@ import entry
 @pytest.mark.parametrize("name,args", [
     ("search_investor_activity", {"request": "YC investors with cheques up to $500K", "criteria": {}, "investor_names": ["YC"], "ticket_size": {"max_usd": 500000, "unknown": "review"}}),
     ("search_acquisitions", {"request": "Acquired companies now hiring SDRs", "party": "target", "criteria": {"hiring": {"roles": ["SDR"]}}, "announced": {"within_days": 60}}),
+    ("search_appointments", {"request": "European startups who made a first hire in the States", "criteria": {"company": {"hq": ["Europe"], "startup": True}}, "first_regional_hire": {"locations": ["US"]}, "appointed": {}}),
 ])
 def test_sourcing_criteria_survive_worker_transport(monkeypatch, name, args):
     calls = []
