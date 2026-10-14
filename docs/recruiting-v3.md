@@ -1,25 +1,5 @@
 # Recruiting v3 connector
 
-## 3.12.0 release candidate (14 October 2026)
-
-The paired app vocabulary distinguishes counsel professions and rank, in-house
-lawyers, Head of Talent and People leadership from broad legal/people functions.
-Sales Operations is not an exact Head of Sales match. Eligibility belongs to the
-same directly owned title clause; supporting another leader is not holding that
-role. Related alternatives do not establish the requested profession or rank.
-
-Structured `search_appointments` accepts `role_mode: "role"` (the default) or
-`"title"`. Role mode interprets the reviewed concepts; title mode retains a
-literal phrase such as `People leaders` without expanding it to Head/VP People.
-One global mode applies to the whole role list; mixed literal/business
-requirements need separate, explicit scopes. Request mode preserves the user's
-literal wording and never turns an unresolved BOTH-role company requirement
-into a count of two unrelated titles.
-
-The app and Worker must ship the same generated 3.12.0 contract pair. A stale
-contract is rejected before search/accounting rather than executed under changed
-definitions. Existing classic, HR and monitoring profiles retain their contracts.
-
 ## Local 3.7.7 release candidate (29 September 2026)
 
 The generated contract pair follows the app's Munich/Saxony vocabulary,
