@@ -137,3 +137,40 @@ def test_bound_violations_name_the_limit_and_the_given_size():
     with pytest.raises(ValueError) as excinfo:
         validate({"request": "x" * 4001, "criteria": {"hiring": {}}}, search["inputSchema"])
     assert "characters given" in str(excinfo.value) and "at most" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("mode", ["role", "title"])
+def test_appointment_role_mode_reaches_the_app_with_the_paired_contract(monkeypatch, mode):
+    calls = []
+    class Response:
+        status = 200
+        async def text(self):
+            return json.dumps({"success": True, "data": {"execution_status": "succeeded", "matches": []}, "meta": {"creditsUsed": 0}})
+    async def fetch(url, options):
+        calls.append((url, options))
+        return Response()
+    monkeypatch.setattr(entry, "fetch", fetch)
+    monkeypatch.setattr(entry, "_api_base_override", "https://app.example.test/api/v2")
+    arguments = {"request": "Appointments with the literal title People leaders", "criteria": {}, "roles": ["People leaders"], "role_mode": mode}
+    result = rpc("tools/call", {"name": "search_appointments", "arguments": arguments})
+    assert not result["result"]["isError"]
+    assert calls[0][0] == "https://app.example.test/api/v3/recruiting/search-appointments"
+    assert calls[0][1]["headers"]["X-Recruiting-Contract"] == CONTRACT["contract_hash"]
+    assert json.loads(calls[0][1]["body"]) == arguments
+
+
+def test_invalid_appointment_role_mode_is_rejected_before_transport(monkeypatch):
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("Invalid mode must not reach the app")
+    monkeypatch.setattr(entry, "_call_recruiting_v3", forbidden)
+    result = rpc("tools/call", {"name": "search_appointments", "arguments": {"request": "Find appointments", "criteria": {}, "roles": ["People leaders"], "role_mode": "function"}})
+    assert result["error"]["code"] == -32602
+
+
+def test_discovery_exposes_precise_professions_ranks_and_literal_appointment_mode():
+    descriptor = next(t for t in tools() if t["name"] == "search_appointments")
+    assert descriptor["inputSchema"]["properties"]["role_mode"]["enum"] == ["role", "title"]
+    assert descriptor["inputSchema"]["properties"]["role_mode"]["default"] == "role"
+    ids = {r["id"] for r in CONTRACT["concepts"]["roles"]}
+    assert {"general_counsel", "legal_counsel", "counsel", "in_house_lawyer", "head_of_talent", "people_leadership"} <= ids
+    assert rpc("initialize")["result"]["serverInfo"]["version"] == CONTRACT["semantic_version"]
