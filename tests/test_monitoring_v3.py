@@ -54,7 +54,9 @@ def test_bad_arguments_are_rejected_before_any_write(monkeypatch):
     for arguments in [
         {"name": "x"},                                   # missing signal_types
         {"name": "x", "signal_types": []},               # empty selection
-        {"name": "x", "signal_types": ["funding"]},      # not a real signal type
+        # Malformed (not slug-shaped). A slug-shaped unknown such as "funding"
+        # is a server-side 400 now that custom definition slugs are accepted.
+        {"name": "x", "signal_types": ["Funding Round"]},
         {"name": "x", "signal_types": ["hiring"], "webhook_url": "https://e.co/h"},  # not accepted here
     ]:
         assert "error" in rpc("tools/call", {"name": "create_monitor", "arguments": arguments})
