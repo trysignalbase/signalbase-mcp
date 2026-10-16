@@ -9,13 +9,14 @@ import entry
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
     ('classic','b9e8421dd4e0340a743a8e076e5906e2aacaa3e7b7708f2088181e4b689020dd','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
-    ('hr','a0d80f2517c411b3983ae69b99ed18c4a28fd09557944dcf0ca751b18e1db237','0b6d02355eae750905502d43ddacc207e98f7e6a733c2aa7998e2f1bca2f9836'),
+    ('hr','a1e2c4ac331cc0ae34de73fe6b9c5e09cec6dbce99707cecf44847c2a169109f','c71e4f62c981a7621a19438c59a7d9fce96ff316e813fbd13fa19f73afc51ef9'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
     # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0, and the hr tools
     # hash re-recorded again when the monitoring tools were added to /v2 (initialize is
     # re-recorded there: same serverInfo, tool list grew, and the monitoring addendum is appended
-    # after the existing HR text). The only schema
+    # after the existing HR text); and again when the alert tools joined the monitoring set
+    # (tool list grew by four, the addendum gained the alert guidance). The only schema
     # The additive hiring employer exclusions and opt-in operator_sector mapping
     # intentionally changed tool discovery. Historical defaults and initialize
     # payloads remain unchanged; no new runtime argument is injected.

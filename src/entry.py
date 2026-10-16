@@ -4298,6 +4298,13 @@ MONITORING_ADDENDUM = (
     " within minutes to hours and re-checked nightly; never tell a user it has failed or ask them"
     " to re-add it. A monitor delivers company-level signals; for people — decision-makers, new"
     " appointments, job changes — use {people} on this same connector."
+    " Alerts are the other delivery tool here: create_alert saves a signal search (job changes,"
+    " hiring, funding rounds or acquisitions) and emails every NEW matching signal to one inbox,"
+    " with no company list. When someone describes criteria rather than naming accounts, run the"
+    " matching search tool first, review the results with them, then call create_alert with the"
+    " same filter parameter names (the alert_filters concept in the monitoring guide lists them)"
+    " and the inbox they want; confirm the inbox before writing. Report the stored filters, the"
+    " inbox and anything listed under ignored. Pausing is update_alert with active:false."
 )
 
 _V3_PEOPLE_TOOLS = (

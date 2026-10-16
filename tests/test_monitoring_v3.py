@@ -6,7 +6,7 @@ from monitoring_v3 import tools
 from mcp_schema import validate
 from monitoring_contract import CONTRACT
 
-WRITE_TOOLS = {"create_monitor", "update_monitor", "add_monitor_targets", "remove_monitor_targets"}
+WRITE_TOOLS = {"create_monitor", "update_monitor", "add_monitor_targets", "remove_monitor_targets", "create_alert", "update_alert"}
 
 
 def rpc(method, params=None, profile="monitoring_v3"):
@@ -167,6 +167,10 @@ MONITORING_TOOL_NAMES = {
     "add_monitor_targets",
     "list_monitor_targets",
     "remove_monitor_targets",
+    "create_alert",
+    "list_alerts",
+    "get_alert",
+    "update_alert",
 }
 
 
@@ -193,6 +197,8 @@ def test_host_profiles_append_monitoring_guidance_without_replacing_their_own():
         assert "does not replay signals" in text
         assert "report what each one resolved to" in text
         assert "never tell a user it has failed" in text
+        # Alerts: search first, then create_alert with the same parameters, one inbox.
+        assert "create_alert" in text and "same filter parameter names" in text
         # People data is available on this same connector, so point at it.
         assert people in text
         # Excluded on purpose: the standalone profile's search/monitor boundary.
@@ -297,3 +303,64 @@ def test_monitoring_calls_work_on_the_canonical_v3_url(monkeypatch):
     response = rpc("tools/call", {"name": "list_monitors", "arguments": {}}, profile="v3")
     assert called == ["list_monitors"]
     assert not response["result"].get("isError"), response
+
+
+# ─── Alerts: saved searches that email new matches ───────────────────────────
+
+
+def test_alert_tools_are_discovered_with_their_filter_guide():
+    names = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
+    assert {"create_alert", "list_alerts", "get_alert", "update_alert"} <= names
+    guide = json.loads(rpc("resources/read", {"uri": "signalbase://monitoring/v3/guide"})["result"]["contents"][0]["text"])
+    filters = guide["concepts"]["alert_filters"]
+    assert set(filters) == {"job_change", "hiring", "funding_round", "acquisition"}
+    # The agent is told the search endpoint and the people/talent vocabulary it needs.
+    assert filters["job_change"]["search_endpoint"] == "/api/v2/signals/job-changes"
+    assert "people" in filters["job_change"]["departments"]
+    assert guide["concepts"]["limits"]["alert_emails_per_day"] > 0
+
+
+def test_create_alert_validates_shape_locally_and_forwards_filters_verbatim(monkeypatch):
+    calls = []
+
+    async def call(name, arguments, key, operation_id):
+        calls.append((name, arguments))
+        return {"success": True, "data": {"execution_status": "succeeded", "alert": {"id": "al-1", "email": "talent@example.com"}, "ignored": ["date_preset"]}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_monitoring_v3", call)
+    args = {
+        "name": "Heads of talent joining AI biotech",
+        "signal_type": "job_change",
+        "filters": {"departments": "people", "seniorities": ["head", "vp"], "search": "AI biotech", "date_preset": "last_30_days"},
+        "email": "talent@example.com",
+    }
+    result = rpc("tools/call", {"name": "create_alert", "arguments": args})["result"]
+    assert not result["isError"]
+    assert calls[0] == ("create_alert", args)
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["alert"]["email"] == "talent@example.com" and payload["ignored"] == ["date_preset"]
+
+
+def test_bad_alert_arguments_never_reach_the_api(monkeypatch):
+    async def call(*args):
+        raise AssertionError("Must not reach the API")
+
+    monkeypatch.setattr(entry, "_call_monitoring_v3", call)
+    for arguments in [
+        {"name": "x", "filters": {"departments": "people"}},                          # missing signal_type
+        {"name": "x", "signal_type": "new_company", "filters": {"search": "ai"}},      # not an alert type
+        {"name": "x", "signal_type": "hiring"},                                        # missing filters
+        {"name": "x", "signal_type": "hiring", "filters": {"title": "talent"},
+         "email": ["a@example.com", "b@example.com"]},                                 # two inboxes
+        {"name": "x", "signal_type": "hiring", "filters": {"title": "talent"},
+         "webhook_url": "https://e.co/h"},                                             # never a webhook
+    ]:
+        assert "error" in rpc("tools/call", {"name": "create_alert", "arguments": arguments}), arguments
+    assert "error" in rpc("tools/call", {"name": "update_alert", "arguments": {"alert_id": "al-1", "webhook_url": "x"}})
+    assert "error" in rpc("tools/call", {"name": "delete_alert", "arguments": {"alert_id": "al-1"}})
+
+
+def test_alert_tools_are_served_on_the_search_profiles_too():
+    for profile in ("hr", "recruiting_v3", "v3"):
+        names = {t["name"] for t in rpc("tools/list", profile=profile)["result"]["tools"]}
+        assert {"create_alert", "list_alerts", "get_alert", "update_alert"} <= names, profile
