@@ -9,7 +9,7 @@ import entry
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
     ('classic','b9e8421dd4e0340a743a8e076e5906e2aacaa3e7b7708f2088181e4b689020dd','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
-    ('hr','a1e2c4ac331cc0ae34de73fe6b9c5e09cec6dbce99707cecf44847c2a169109f','c71e4f62c981a7621a19438c59a7d9fce96ff316e813fbd13fa19f73afc51ef9'),
+    ('hr','6795e54a4f3d317cabbd50abde822925773b3f1a91491c923b001ae5c304b051','c71e4f62c981a7621a19438c59a7d9fce96ff316e813fbd13fa19f73afc51ef9'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
     # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0, and the hr tools

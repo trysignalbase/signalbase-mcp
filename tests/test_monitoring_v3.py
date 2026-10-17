@@ -317,7 +317,7 @@ def test_alert_tools_are_discovered_with_their_filter_guide():
     # The agent is told the search endpoint and the people/talent vocabulary it needs.
     assert filters["job_change"]["search_endpoint"] == "/api/v2/signals/job-changes"
     assert "people" in filters["job_change"]["departments"]
-    assert guide["concepts"]["limits"]["alert_emails_per_day"] > 0
+    assert guide["concepts"]["limits"]["alert_emails_per_inbox_per_day"] > 0
 
 
 def test_create_alert_validates_shape_locally_and_forwards_filters_verbatim(monkeypatch):
@@ -357,6 +357,9 @@ def test_bad_alert_arguments_never_reach_the_api(monkeypatch):
     ]:
         assert "error" in rpc("tools/call", {"name": "create_alert", "arguments": arguments}), arguments
     assert "error" in rpc("tools/call", {"name": "update_alert", "arguments": {"alert_id": "al-1", "webhook_url": "x"}})
+    # email: null is the documented way back to the owner's address; the local validator must let it through.
+    descriptor = next(t for t in tools() if t["name"] == "update_alert")
+    validate({"alert_id": "al-1", "email": None}, descriptor["inputSchema"])
     assert "error" in rpc("tools/call", {"name": "delete_alert", "arguments": {"alert_id": "al-1"}})
 
 
