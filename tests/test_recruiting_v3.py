@@ -174,3 +174,15 @@ def test_discovery_exposes_precise_professions_ranks_and_literal_appointment_mod
     ids = {r["id"] for r in CONTRACT["concepts"]["roles"]}
     assert {"general_counsel", "legal_counsel", "counsel", "in_house_lawyer", "head_of_talent", "people_leadership"} <= ids
     assert rpc("initialize")["result"]["serverInfo"]["version"] == CONTRACT["semantic_version"]
+
+
+def test_paired_cmo_contract_exposes_two_full_meanings_without_an_acronym_alias():
+    from recruiting_contract import REQUEST_CONTRACT
+    for contract in (CONTRACT, REQUEST_CONTRACT):
+        assert contract["semantic_version"] == "3.13.0"
+        roles = {role["id"]: role for role in contract["concepts"]["roles"]}
+        assert "cmo" not in roles
+        for role_id in ("chief_marketing_officer", "chief_medical_officer"):
+            assert role_id in roles
+            assert "cmo" not in roles[role_id]["aliases"]
+        assert "This clarification is free" in contract["instructions"]
