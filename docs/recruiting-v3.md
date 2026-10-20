@@ -1,5 +1,12 @@
 # Recruiting v3 connector
 
+The paired 3.13.0 app separates Chief Marketing Officer and Chief Medical
+Officer. Business CMO requests receive a free meaning question before planning
+or charging; industry does not select the function. Literal CMO is supported
+only by current hiring/appointment title mode, with the function unresolved.
+Future outlook and hiring-plan roles require a full meaning. Release the exact
+generated app/Worker pair; stale contract headers and signed plans reject free.
+
 ## 3.12.0 release candidate (20 October 2026)
 
 The paired app vocabulary distinguishes counsel professions and rank, in-house
