@@ -4319,7 +4319,10 @@ MONITORING_PEOPLE_TOOLS = {
 
 
 def _monitoring_addendum(profile):
-    return MONITORING_ADDENDUM.format(people=MONITORING_PEOPLE_TOOLS[profile])
+    text = MONITORING_ADDENDUM.format(people=MONITORING_PEOPLE_TOOLS[profile])
+    if profile == "v3":
+        text = text.replace("same filter parameter names (the alert_filters concept in the monitoring guide lists them)", "approved structured filters from alert_filters in the monitoring guide (a recruiting request is not an alert filter)")
+    return text
 
 
 def _monitoring_tools():
@@ -4366,7 +4369,7 @@ def _v3_collect_people_tool():
 def _tools_for_profile(profile):
     if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import tools as v3_tools
-        tools = v3_tools(profile == "recruiting_v3_request")
+        tools = v3_tools(profile in {"v3", "recruiting_v3_request"})
         if profile in V3_UNIFIED_PROFILES:
             tools = [*tools, _v3_people_tool(), _v3_collect_people_tool(), *_monitoring_tools()]
         elif profile == "recruiting_v3_request":
@@ -4489,17 +4492,18 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": guides}}
     if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import handle as handle_v3
-        request_adapter = profile == "recruiting_v3_request"
+        request_adapter = profile in {"v3", "recruiting_v3_request"}
         callback = (lambda tool, args, key, op: _call_recruiting_v3(tool, args, key, op, True)) if request_adapter else _call_recruiting_v3
         v3_response = await handle_v3(request_body, api_key, callback, request_adapter)
+        if profile == "v3" and method == "tools/call" and isinstance(params.get("arguments"), dict) and "criteria" in params["arguments"] and v3_response and v3_response.get("error", {}).get("code") == -32602:
+            v3_response["error"]["message"] += " Refresh Core tools for request-style searches. Structured clients use /v3/recruiting. Retry an uncertain old structured call there with identical arguments and the same operation_id only within its original 10-minute replay window. If expired or timing is unknown, inspect/reconcile usage first; do not repeat the paid call."
         if profile in V3_UNIFIED_PROFILES and method == "initialize":
             result = v3_response.get("result") or {}
             if result.get("instructions"):
                 result["instructions"] = result["instructions"] + _monitoring_addendum(profile)
             if profile in V3_SERVER_NAMES:
-                # Same tools and instructions on every v3 path; only the name
-                # differs, because the app proves discovery by it per route.
-                result["serverInfo"] = {"name": V3_SERVER_NAMES[profile], "version": "1.1.0"}
+                # Core uses request searches; explicit aliases retain structured inputs.
+                result["serverInfo"] = {"name": V3_SERVER_NAMES[profile], "version": "2.0.0" if profile == "v3" else "1.1.0"}
         return v3_response
     if profile in {"hr_brief", "hr_recruiting"}:
         if method == "initialize":

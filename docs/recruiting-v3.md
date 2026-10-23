@@ -1,5 +1,15 @@
 # Recruiting v3 connector
 
+Core `/v3` uses original-request recruiting searches, retaining people, contact
+collection and monitoring. Discover current tools and reconnect clients with
+cached schemas. Explicit `/v3/recruiting` and `/v3/monitoring` retain structured
+search inputs; root/v2 remain unchanged. Free preview stays structured.
+
+For an uncertain old structured Core call, retry through `/v3/recruiting` only
+within its original 10-minute replay window, with identical arguments and the
+same `operation_id`. If expired or timing is unknown, inspect/reconcile usage
+first; do not repeat the paid call. A transport failure does not prove a refund.
+
 ## 3.12.0 release candidate (20 October 2026)
 
 The paired app vocabulary distinguishes counsel professions and rank, in-house
