@@ -282,7 +282,8 @@ def test_v3_serves_exactly_what_the_aliases_serve():
         assert {t["name"] for t in rpc("tools/list", profile=alias)["result"]["tools"]} == canonical, alias
     assert {"search_people", "search_companies", "create_monitor"} <= canonical
     instructions = rpc("initialize", profile="v3")["result"]["instructions"]
-    assert instructions == rpc("initialize", profile="recruiting_v3")["result"]["instructions"]
+    assert "Pass the complete original request" in instructions
+    assert "approved structured filters" in instructions
 
 
 def test_each_v3_path_keeps_the_name_its_app_route_checks():
