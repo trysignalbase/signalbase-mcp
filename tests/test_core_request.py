@@ -14,11 +14,11 @@ def rpc(method, params=None, profile="v3"):
 def test_core_schema_guide_and_retained_union():
     core = {t["name"]: t for t in rpc("tools/list")["result"]["tools"]}
     request = {t["name"]: t for t in tools(True)}
-    assert core == {**request, **{t["name"]: t for t in [entry._v3_people_tool(), entry._v3_collect_people_tool(), *entry._monitoring_tools()]}}
-    assert rpc("initialize")["result"]["serverInfo"] == {"name": "signalbase-v3", "version": "2.0.0"}
+    assert core == {**request, **{t["name"]: t for t in [entry._v3_people_tool(), entry._v3_collect_people_tool(), *entry._monitoring_tools(), *entry._agent_tools()]}}
+    assert rpc("initialize")["result"]["serverInfo"] == {"name": "signalbase-v3", "version": "2.1.0"}
     guide = json.loads(rpc("resources/read", {"uri": "signalbase://recruiting/v3/guide"})["result"]["contents"][0]["text"])
     assert guide["examples"] == REQUEST_CONTRACT["examples"]
-    assert len(rpc("resources/list")["result"]["resources"]) == 2
+    assert len(rpc("resources/list")["result"]["resources"]) == 3
     for alias in ("recruiting_v3", "monitoring_v3"):
         actual = {t["name"]: t for t in rpc("tools/list", profile=alias)["result"]["tools"]}
         for tool in tools(False):

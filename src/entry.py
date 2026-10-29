@@ -1753,6 +1753,24 @@ async def _call_recruiting_v3(tool, arguments, api_key, operation_id, request_ad
     return json.loads(body)
 
 
+async def _call_agents_v3(tool, arguments, api_key, operation_id):
+    from agents_contract import CONTRACT
+    base = _current_api_base()
+    if not base.endswith("/api/v2"):
+        raise ValueError("API_BASE must end in /api/v2")
+    response = await fetch(base[:-len("/api/v2")] + "/api/v3/agents/" + tool.replace("_", "-"), to_js({"method":"POST", "headers":{
+        "Authorization":f"Bearer {api_key}", "Content-Type":"application/json",
+        "Idempotency-Key":operation_id, "X-Agents-Contract":CONTRACT["contract_hash"]}, "body":json.dumps(arguments)}, dict_converter=Object.fromEntries))
+    text = await response.text()
+    if len(text) > 100_000:
+        raise ValueError("Agent response exceeds100KB")
+    value = json.loads(text)
+    if not 200 <= response.status < 300:
+        return {"success": False, "error": value.get("error", "Agent service request failed"),
+                "code": value.get("code"), "meta": value.get("meta", {})}
+    return value
+
+
 async def _call_monitoring_v3(tool, arguments, api_key, operation_id):
     from monitoring_contract import CONTRACT
     base = _current_api_base()
@@ -4366,6 +4384,15 @@ def _v3_collect_people_tool():
     }
 
 
+AGENT_HOST_PROFILES = {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}
+AGENT_RESOURCE_URI = "signalbase://agents/v3/guide"
+
+
+def _agent_tools():
+    from agents_v3 import tools
+    return tools()
+
+
 def _tools_for_profile(profile):
     if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import tools as v3_tools
@@ -4374,7 +4401,7 @@ def _tools_for_profile(profile):
             tools = [*tools, _v3_people_tool(), _v3_collect_people_tool(), *_monitoring_tools()]
         elif profile == "recruiting_v3_request":
             tools = [*tools, _v3_people_tool(), _v3_collect_people_tool()]
-        return tools
+        return [*tools, *_agent_tools()]
     if profile == "hr_recruiting":
         return _recruiting_tools()
     if profile == "hr_brief":
@@ -4427,6 +4454,9 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
     else:
         params = raw_params
 
+    if profile in AGENT_HOST_PROFILES and ((method == "tools/call" and params.get("name") in {tool["name"] for tool in _agent_tools()}) or (method == "resources/read" and params.get("uri") == AGENT_RESOURCE_URI)):
+        from agents_v3 import handle
+        return await handle(request_body, api_key, _call_agents_v3)
     if (
         profile in MONITORING_HOST_PROFILES
         and method == "tools/call"
@@ -4483,12 +4513,15 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         # recruiting_v3 answers tools/list inside its own handler, so the union
         # has to be applied here.
         return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": _tools_for_profile(profile)}}
-    if profile in V3_UNIFIED_PROFILES and method == "resources/list":
+    if profile in AGENT_HOST_PROFILES and method == "resources/list":
         recruiting_guide = {"uri": "signalbase://recruiting/v3/guide", "name": "Recruiting search concepts and examples", "mimeType": "application/json"}
         monitoring_guide = {"uri": MONITORING_RESOURCE_URI, "name": "Monitoring concepts and examples", "mimeType": "application/json"}
         # Each profile lists its own guide first, as it did before the merge,
         # so a client that reads the first resource gets what it always got.
         guides = [monitoring_guide, recruiting_guide] if profile == "monitoring_v3" else [recruiting_guide, monitoring_guide]
+        if profile == "recruiting_v3_request":
+            guides = [recruiting_guide]
+        guides.append({"uri":AGENT_RESOURCE_URI,"name":"Research agents, schedules and run history","mimeType":"application/json"})
         return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": guides}}
     if profile in {"v3", "recruiting_v3", "recruiting_v3_request", "monitoring_v3"}:
         from recruiting_v3 import handle as handle_v3
@@ -4497,13 +4530,16 @@ async def _handle_jsonrpc(request_body: dict, api_key: str, profile: str = "clas
         v3_response = await handle_v3(request_body, api_key, callback, request_adapter)
         if profile == "v3" and method == "tools/call" and isinstance(params.get("arguments"), dict) and "criteria" in params["arguments"] and v3_response and v3_response.get("error", {}).get("code") == -32602:
             v3_response["error"]["message"] += " Refresh Core tools for request-style searches. Structured clients use /v3/recruiting. Retry an uncertain old structured call there with identical arguments and the same operation_id only within its original 10-minute replay window. If expired or timing is unknown, inspect/reconcile usage first; do not repeat the paid call."
+        if profile in AGENT_HOST_PROFILES and method == "initialize":
+            from agents_contract import CONTRACT as AGENTS_CONTRACT
+            v3_response["result"]["instructions"] += "\n" + AGENTS_CONTRACT["instructions"]
         if profile in V3_UNIFIED_PROFILES and method == "initialize":
             result = v3_response.get("result") or {}
             if result.get("instructions"):
                 result["instructions"] = result["instructions"] + _monitoring_addendum(profile)
             if profile in V3_SERVER_NAMES:
                 # Core uses request searches; explicit aliases retain structured inputs.
-                result["serverInfo"] = {"name": V3_SERVER_NAMES[profile], "version": "2.0.0" if profile == "v3" else "1.1.0"}
+                result["serverInfo"] = {"name": V3_SERVER_NAMES[profile], "version": "2.1.0" if profile == "v3" else "1.1.0"}
         return v3_response
     if profile in {"hr_brief", "hr_recruiting"}:
         if method == "initialize":

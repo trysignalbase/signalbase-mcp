@@ -25,16 +25,18 @@ from monitoring_contract import CONTRACT
 RESOURCE_URI = "signalbase://monitoring/v3/guide"
 
 
-def tools():
-    result = deepcopy(CONTRACT["tools"])
+def tools(contract=None):
+    contract = CONTRACT if contract is None else contract
+    result = deepcopy(contract["tools"])
     for tool in result:
-        tool["inputSchema"]["properties"]["operation_id"] = {
+        tool["inputSchema"]["properties"].setdefault("operation_id", {
             "type": "string", "pattern": "^[A-Za-z0-9_-]{8,128}$",
-            "description": "Retry identifier. After a transport failure, retry the identical call with the SAME operation_id: the change is applied at most once, and a replay returns the original result. Never send a new id to retry, and never reuse an id for different arguments. Omit for a new action."}
+            "description": "Retry identifier. After a transport failure, retry the identical call with the SAME operation_id: the change is applied at most once, and a replay returns the original result. Never send a new id to retry, and never reuse an id for different arguments. Omit for a new action."})
     return result
 
 
-async def handle(body, api_key, call):
+async def handle(body, api_key, call, *, contract=None, resource_uri=RESOURCE_URI, label="monitoring"):
+    contract = CONTRACT if contract is None else contract
     method, request_id = body.get("method"), body.get("id")
     params = body.get("params") or {}
 
@@ -45,25 +47,25 @@ async def handle(body, api_key, call):
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
     if method == "initialize":
-        return response({"protocolVersion": "2025-03-26", "serverInfo": {"name": CONTRACT["server_name"], "version": CONTRACT["semantic_version"]}, "capabilities": {"tools": {"listChanged": False}, "resources": {}}, "instructions": CONTRACT["instructions"]})
+        return response({"protocolVersion": "2025-03-26", "serverInfo": {"name": contract["server_name"], "version": contract["semantic_version"]}, "capabilities": {"tools": {"listChanged": False}, "resources": {}}, "instructions": contract["instructions"]})
     if method == "notifications/initialized":
         return None
     if method == "ping":
         return response({})
     if method == "tools/list":
-        return response({"tools": tools()})
+        return response({"tools": tools(contract)})
     if method == "resources/list":
-        return response({"resources": [{"uri": RESOURCE_URI, "name": "Monitoring concepts and examples", "mimeType": "application/json"}]})
+        return response({"resources": [{"uri": resource_uri, "name": f"{label.capitalize()} concepts and examples", "mimeType": "application/json"}]})
     if method == "resources/read":
-        if params.get("uri") != RESOURCE_URI:
+        if params.get("uri") != resource_uri:
             return error(-32602, "Unknown resource")
-        return response({"contents": [{"uri": params["uri"], "mimeType": "application/json", "text": json.dumps({k: CONTRACT[k] for k in ("semantic_version", "concepts", "examples")}, separators=(",", ":"))}]})
+        return response({"contents": [{"uri": params["uri"], "mimeType": "application/json", "text": json.dumps({k: contract[k] for k in ("semantic_version", "concepts", "examples")}, separators=(",", ":"))}]})
     if method != "tools/call":
         return error(-32601, "Unknown method")
 
-    tool = next((tool for tool in tools() if tool["name"] == params.get("name")), None)
+    tool = next((tool for tool in tools(contract) if tool["name"] == params.get("name")), None)
     if not tool:
-        return error(-32602, "Unknown monitoring tool; use tools/list")
+        return error(-32602, f"Unknown {label} tool; use tools/list")
     arguments = deepcopy(params.get("arguments", {}))
     try:
         validate(arguments, tool["inputSchema"])
@@ -79,7 +81,7 @@ async def handle(body, api_key, call):
         # Ambiguous by nature: the write may or may not have landed. Say so, and
         # pin the retry to this operation_id so it cannot double-apply.
         payload = {"execution_status": "failed",
-                   "error": "Transport did not complete. This does not mean the change failed — retry the identical call with the same operation_id to apply it at most once, or read the monitor back to check.",
+                   "error": "Transport did not complete. This does not mean the change failed — retry the identical call with the same operation_id to apply it at most once, or read the saved record back to check.",
                    "operation_id": operation_id}
         return response({"isError": True, "content": [{"type": "text", "text": json.dumps(payload, separators=(",", ":"))}]})
 
@@ -89,7 +91,7 @@ async def handle(body, api_key, call):
         # operation_id) carries its message; surface it rather than a generic.
         message = result.get("error") if isinstance(result, dict) else None
         failure = {"execution_status": "failed",
-                   "error": message or "Monitoring service returned an invalid result",
+                   "error": message or f"{label.capitalize()} service returned an invalid result",
                    "code": result.get("code") if isinstance(result, dict) else None,
                    "operation_id": operation_id}
         return response({"isError": True, "content": [{"type": "text", "text": json.dumps(failure, separators=(",", ":"))}]})
