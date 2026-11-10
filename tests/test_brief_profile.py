@@ -9,7 +9,7 @@ import entry
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
     ('classic','b9e8421dd4e0340a743a8e076e5906e2aacaa3e7b7708f2088181e4b689020dd','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
-    ('hr','8fd394b07bd0fe15342e333691ef1100e2728149cfc781c15147503f645929f8','c71e4f62c981a7621a19438c59a7d9fce96ff316e813fbd13fa19f73afc51ef9'),
+    ('hr','d912d0b04ffeef1ee98f362f924d474033494c9da2022a4671aca84b53af0dc4','223e791dfe96c958ac7fb6088f2d5cd6b976c463f47314936a316effaa230d49'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
     # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0, and the hr tools
@@ -18,7 +18,9 @@ def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_
     # after the existing HR text); and again when the alert tools joined the monitoring set
     # (tool list grew by four, the addendum gained the alert guidance); and again when
     # create_monitor/update_monitor signal_types became a slug pattern instead of an enum
-    # so custom signal definitions can be selected (initialize unchanged). The only schema
+    # so custom signal definitions can be selected (initialize unchanged); and again when the
+    # five custom-signal tools joined the monitoring set (monitoring contract 1.2.0: tool list
+    # grew by five, the addendum gained the custom-signal guidance). The only schema
     # The additive hiring employer exclusions and opt-in operator_sector mapping
     # intentionally changed tool discovery. Historical defaults and initialize
     # payloads remain unchanged; no new runtime argument is injected.

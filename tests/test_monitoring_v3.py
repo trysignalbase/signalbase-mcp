@@ -6,7 +6,8 @@ from monitoring_v3 import tools
 from mcp_schema import validate
 from monitoring_contract import CONTRACT
 
-WRITE_TOOLS = {"create_monitor", "update_monitor", "add_monitor_targets", "remove_monitor_targets", "create_alert", "update_alert"}
+WRITE_TOOLS = {"create_monitor", "update_monitor", "add_monitor_targets", "remove_monitor_targets", "create_alert", "update_alert",
+               "create_custom_signal", "update_custom_signal"}
 
 
 def rpc(method, params=None, profile="monitoring_v3"):
@@ -173,6 +174,11 @@ MONITORING_TOOL_NAMES = {
     "list_alerts",
     "get_alert",
     "update_alert",
+    "create_custom_signal",
+    "list_custom_signal_definitions",
+    "get_custom_signal",
+    "update_custom_signal",
+    "search_custom_signals",
 }
 
 
@@ -370,3 +376,71 @@ def test_alert_tools_are_served_on_the_search_profiles_too():
     for profile in ("hr", "recruiting_v3", "v3"):
         names = {t["name"] for t in rpc("tools/list", profile=profile)["result"]["tools"]}
         assert {"create_alert", "list_alerts", "get_alert", "update_alert"} <= names, profile
+
+
+# ─── Custom signals: definitions the team writes itself ──────────────────────
+
+
+CUSTOM_SIGNAL_TOOLS = {"create_custom_signal", "list_custom_signal_definitions", "get_custom_signal",
+                       "update_custom_signal", "search_custom_signals"}
+
+
+def test_custom_signal_tools_are_discovered_with_their_lifecycle_guide():
+    names = {t["name"] for t in rpc("tools/list")["result"]["tools"]}
+    assert CUSTOM_SIGNAL_TOOLS <= names
+    guide = json.loads(rpc("resources/read", {"uri": "signalbase://monitoring/v3/guide"})["result"]["contents"][0]["text"])
+    concepts = guide["concepts"]["custom_signals"]
+    # The agent is told the states it will poll through and that only one tool costs anything.
+    for state in ("compiling", "ready", "active", "paused"):
+        assert state in concepts["lifecycle"]
+    assert "search_custom_signals" in guide["concepts"]["limits"]["credits"]
+    assert guide["concepts"]["limits"]["custom_definitions_per_team"] >= 1
+    # A custom slug is a monitor signal type too.
+    assert "list_custom_signal_definitions" in guide["concepts"]["signal_types"]["custom"]
+
+
+def test_only_the_search_tool_is_paid_and_only_the_two_writes_write():
+    for tool in tools():
+        if tool["name"] not in CUSTOM_SIGNAL_TOOLS:
+            continue
+        paid = tool["name"] == "search_custom_signals"
+        assert ("1 credit" in tool["description"]) is paid, tool["name"]
+        assert ("Free" in tool["description"]) is not paid, tool["name"]
+        assert tool["annotations"]["readOnlyHint"] is (tool["name"] not in WRITE_TOOLS), tool["name"]
+        assert tool["annotations"]["destructiveHint"] is False
+
+
+def test_bad_custom_signal_arguments_never_reach_the_api(monkeypatch):
+    async def call(*args):
+        raise AssertionError("Must not reach the API")
+    monkeypatch.setattr(entry, "_call_monitoring_v3", call)
+    rule = "The author's own company announces hiring its first sales leader or founding sales team."
+    for name, arguments in [
+        ("create_custom_signal", {"name": "Sales", "description": "sales hires"}),        # not a rule
+        ("create_custom_signal", {"name": "Sales", "description": rule, "targets": []}),  # empty is not global
+        ("get_custom_signal", {"slug": "First Sales Leader"}),                            # not a slug
+        ("update_custom_signal", {"slug": "first_sales_leader"}),                         # missing active
+        ("search_custom_signals", {"type": "stealth_exit,new_office"}),                   # REST form, not a list
+        ("search_custom_signals", {"min_confidence": 1.5}),
+        ("search_custom_signals", {"limit": 51}),
+        ("search_custom_signals", {"date_preset": "last_fortnight"}),
+    ]:
+        assert "error" in rpc("tools/call", {"name": name, "arguments": arguments}), (name, arguments)
+
+
+def test_custom_signal_calls_forward_verbatim_and_route_by_tool_name(monkeypatch):
+    calls = []
+
+    async def call(name, arguments, key, operation_id):
+        calls.append((name, arguments))
+        return {"success": True, "data": {"execution_status": "succeeded", "signals": [], "count": 0}, "meta": {"creditsUsed": 0}}
+
+    monkeypatch.setattr(entry, "_call_monitoring_v3", call)
+    args = {"type": ["stealth_exit", "new_office"], "countries": "DE,AT", "date_preset": "last_30d", "min_confidence": 0.8, "count": True}
+    for profile in ("monitoring_v3", "v3", "recruiting_v3", "hr"):
+        result = rpc("tools/call", {"name": "search_custom_signals", "arguments": args}, profile=profile)["result"]
+        assert not result["isError"], profile
+    assert calls and all(c == ("search_custom_signals", args) for c in calls)
+    # A write carries its arguments through untouched, operation_id stripped.
+    rpc("tools/call", {"name": "update_custom_signal", "arguments": {"slug": "first_sales_leader_x7k2", "active": True, "operation_id": "retry-abc12345"}})
+    assert calls[-1] == ("update_custom_signal", {"slug": "first_sales_leader_x7k2", "active": True})
