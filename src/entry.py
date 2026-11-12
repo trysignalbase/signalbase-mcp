@@ -4323,6 +4323,12 @@ MONITORING_ADDENDUM = (
     " same filter parameter names (the alert_filters concept in the monitoring guide lists them)"
     " and the inbox they want; confirm the inbox before writing. Report the stored filters, the"
     " inbox and anything listed under ignored. Pausing is update_alert with active:false."
+    " Custom signals extend the signal types: when someone wants an event the built-in types do"
+    " not cover, read list_custom_signal_definitions first (the shared catalogue may already have"
+    " it) and search_custom_signals for its signals; otherwise create_custom_signal with a"
+    " plain-English rule, poll get_custom_signal until it is ready, show the user the test leads,"
+    " and start it with update_custom_signal only when they agree. search_custom_signals is the"
+    " one paid tool among these (1 credit per page; count:true is free)."
 )
 
 _V3_PEOPLE_TOOLS = (
