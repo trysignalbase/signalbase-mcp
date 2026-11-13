@@ -22,7 +22,7 @@ def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_
     # five custom-signal tools joined the monitoring set (monitoring contract 1.2.0: tool list
     # grew by five, the addendum gained the custom-signal guidance); and again when the
     # per-team cap in the create_custom_signal description and the limits block went
-    # from 3 to 5 definitions (no schema change). The only schema
+    # from 3 to 5 definitions (initialize unchanged, no schema change). The only schema
     # The additive hiring employer exclusions and opt-in operator_sector mapping
     # intentionally changed tool discovery. Historical defaults and initialize
     # payloads remain unchanged; no new runtime argument is injected.
