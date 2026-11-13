@@ -9,7 +9,7 @@ import entry
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
     ('classic','b9e8421dd4e0340a743a8e076e5906e2aacaa3e7b7708f2088181e4b689020dd','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
-    ('hr','d912d0b04ffeef1ee98f362f924d474033494c9da2022a4671aca84b53af0dc4','223e791dfe96c958ac7fb6088f2d5cd6b976c463f47314936a316effaa230d49'),
+    ('hr','2f9268f29437c8590a5b78917b15c2c4cad45c54c4edaa11ea9de24c73c67e0f','223e791dfe96c958ac7fb6088f2d5cd6b976c463f47314936a316effaa230d49'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
     # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0, and the hr tools
@@ -20,7 +20,9 @@ def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_
     # create_monitor/update_monitor signal_types became a slug pattern instead of an enum
     # so custom signal definitions can be selected (initialize unchanged); and again when the
     # five custom-signal tools joined the monitoring set (monitoring contract 1.2.0: tool list
-    # grew by five, the addendum gained the custom-signal guidance). The only schema
+    # grew by five, the addendum gained the custom-signal guidance); and again when the
+    # per-team cap in the create_custom_signal description and the limits block went
+    # from 3 to 5 definitions (initialize unchanged, no schema change). The only schema
     # The additive hiring employer exclusions and opt-in operator_sector mapping
     # intentionally changed tool discovery. Historical defaults and initialize
     # payloads remain unchanged; no new runtime argument is injected.
