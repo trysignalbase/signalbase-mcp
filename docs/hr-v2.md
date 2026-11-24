@@ -158,7 +158,9 @@ rates, and does not infer a particular role from an any-hire benchmark.
   Namibia. The classic endpoint continues accepting legacy country literals.
 
 “Open” is an indexed freshness estimate: `validThrough` has not passed, or a posting without
-an expiry is at most 60 days old. Set `verify_live=true` or require
+an expiry is at most 60 days old, or was first indexed in the last 30 days from the
+employer's own board (an applicant-tracking page such as Greenhouse, Lever or Ashby, or
+its LinkedIn jobs) whatever its posting date. Set `verify_live=true` or require
 `verified_live_vacancy` to check supported public ATS records; unsupported URLs remain
 unknown rather than being fetched. Use posting/source links as evidence.
 

@@ -653,7 +653,7 @@ TOOLS = [
                 },
                 "include_expired": {
                     "type": "boolean",
-                    "description": "Omitted or true preserves all historical postings. Explicit false filters to open postings (unexpired validThrough, or posted within 60 days when no expiry is known). Applies even with date ranges/presets.",
+                    "description": "Omitted or true preserves all historical postings. Explicit false filters to open postings (unexpired validThrough; or, when no expiry is known, posted within 60 days, or first indexed within the last 30 days from the employer's own board: an applicant-tracking page such as Greenhouse, Lever or Ashby, or its LinkedIn jobs). Applies even with date ranges/presets.",
                 },
                 "dateFrom": DATE_FROM_PROP,
                 "dateTo": DATE_TO_PROP,
@@ -3901,8 +3901,10 @@ Count first: count=true is free. Multi-country counts include a best-effort brea
 (up to six probes); by_country=false skips it. A null breakdown means the probe failed,
 not zero results. Posting counts are not unique company counts.
 
-Hiring searches default to indexed-open postings: unexpired listings, or posts within
-60 days when expiry is unknown. This is an estimate, not source verification. `as_of`
+Hiring searches default to indexed-open postings: unexpired listings, or, when expiry
+is unknown, posts within 60 days or roles first indexed within the last 30 days from the
+employer's own board (an applicant-tracking page or its LinkedIn jobs), whatever their
+posting date. This is an estimate, not source verification. `as_of`
 anchors relative windows and this freshness rule, but it is not a historical snapshot:
 later-indexed backdated records can change a replay. Historical end dates/calendar
 presets retain history; include_expired=true is also available. Results always retain data rows, and hiring also includes companies
