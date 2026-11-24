@@ -8,8 +8,8 @@ import entry
 
 
 @pytest.mark.parametrize('profile,tools_hash,init_hash', [
-    ('classic','b9e8421dd4e0340a743a8e076e5906e2aacaa3e7b7708f2088181e4b689020dd','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
-    ('hr','2f9268f29437c8590a5b78917b15c2c4cad45c54c4edaa11ea9de24c73c67e0f','223e791dfe96c958ac7fb6088f2d5cd6b976c463f47314936a316effaa230d49'),
+    ('classic','c5bfcb131b193cada0a6e4885e13101696167267ee523925b80ee13c35f03ab1','240e22aad4b2e9503546e87c26fc60252557fd219de1224fde28a851d055825d'),
+    ('hr','2f9268f29437c8590a5b78917b15c2c4cad45c54c4edaa11ea9de24c73c67e0f','ed8469caa5b8535420e068f15f3d1c74c5346efcba73b798d8b83cc011c151e1'),
 ])
 def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_hash):
     # Recorded from approved pre-change commit71bca59; re-recorded for 1.2.0, and the hr tools
@@ -26,6 +26,9 @@ def test_prebrief_discovery_contract_is_byte_equivalent(profile,tools_hash,init_
     # The additive hiring employer exclusions and opt-in operator_sector mapping
     # intentionally changed tool discovery. Historical defaults and initialize
     # payloads remain unchanged; no new runtime argument is injected.
+    # Re-recorded when the include_expired description and the v2 instructions were reworded
+    # to state the app's open rule (a role first indexed in the last 30 days from the employer's
+    # own board also counts as open): text only, no schema or argument change.
     digest=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=True).encode()).hexdigest()
     assert digest(entry._tools_for_profile(profile))==tools_hash
     assert digest(asyncio.run(entry._handle_jsonrpc({'id':1,'method':'initialize'},'key',profile)))==init_hash
